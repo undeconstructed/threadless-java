@@ -60,7 +60,7 @@ public class Main {
 		SlowThing slow = new SlowThing();
 
 		lox.execute(ctl -> {
-			ctl.submit(ctx -> {
+			ctl.submit("a", ctx -> {
 				// TaskExternal<String> ext = ctx.ext();
 				// slow.doSlowThingFromExt(ext);
 				// return ctx.c(() -> ctx.v("do"));
@@ -72,10 +72,10 @@ public class Main {
 					return ctx.v("do " + f.value());
 				});
 			});
-			ctl.submit(ctx -> {
+			ctl.submit("a", ctx -> {
 				return ctx.v("re 0");
 			});
-			ctl.submit(ctx -> {
+			ctl.submit("a", ctx -> {
 				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
 					if (f.isError()) {
@@ -84,10 +84,20 @@ public class Main {
 					return ctx.v("me " + f.value());
 				});
 			});
+			ctl.submit("b", ctx -> {
+				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				return ctx.c(() -> {
+					if (f.isError()) {
+						return ctx.v("fa error");
+					}
+					return ctx.v("fa " + f.value());
+				});
+			});
+			System.out.format("[%d] start%n", System.currentTimeMillis() - t0);
 		});
 
 		lox.shutdown();
-		System.out.println("done");
+		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
 		System.exit(0);
 	}
 }

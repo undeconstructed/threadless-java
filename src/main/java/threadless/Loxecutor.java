@@ -12,8 +12,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
- * system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with
+ * queueing/ratelimiting/etc per whole system and per context.
  * 
  * @author phil
  */
@@ -24,7 +24,7 @@ public class Loxecutor {
 	 */
 	public interface LoxCtl {
 
-		public abstract <T> String submit(Task<T> task);
+		public abstract <T> String submit(String lock, Task<T> task);
 
 		public abstract void notify(String key, Object object);
 	}
@@ -49,15 +49,22 @@ public class Loxecutor {
 		public abstract void call(List<Pair<String, Object>> results);
 	}
 
+	/**
+	 * Tracks the execution of a task. Since the context lasts through all
+	 * invocations in a task, it makes some sense for these to be the same
+	 * thing.
+	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	class Execution implements TaskContext {
 
 		private final String id;
+		private final String lock;
 		private Task<?> task;
 		private Map<String, Object> keys;
 
-		public Execution(String id, Task<?> task) {
+		public Execution(String id, String lock, Task<?> task) {
 			this.id = id;
+			this.lock = lock;
 			this.task = task;
 		}
 
@@ -148,6 +155,7 @@ public class Loxecutor {
 	private long n = 0, c = 0;
 	private Map<String, Execution> work = new HashMap<>();
 	private Map<String, Execution> blocked = new HashMap<>();
+	private Map<String, Queue<Execution>> locked = new HashMap<>();
 	private Queue<Execution> queue = new LinkedList<>();
 	private AtomicBoolean shutdown = new AtomicBoolean(false);
 
@@ -174,8 +182,8 @@ public class Loxecutor {
 				}
 
 				@Override
-				public <T> String submit(Task<T> task) {
-					return Loxecutor.this.execute(task);
+				public <T> String submit(String lock, Task<T> task) {
+					return Loxecutor.this.submit0(lock, task);
 				}
 			});
 
@@ -184,23 +192,32 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * Submit a task. This is made threadsafe by running in the context of the
+	 * {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
-	public <T> Future<String> submit(Task<T> task) {
+	public <T> Future<String> submit(String lock, Task<T> task) {
 		return thread.submit(() -> {
-			return Loxecutor.this.execute(task);
+			return Loxecutor.this.submit0(lock, task);
 		});
 	}
 
-	private <T> String execute(Task<T> task) {
+	private <T> String submit0(String lock, Task<T> task) {
 		n++;
 		String id = Long.toString(n);
 
-		Execution e = new Execution(id, task);
+		Execution e = new Execution(id, lock, task);
 		work.put(id, e);
-		queue.add(e);
+		Queue<Execution> l = locked.get(lock);
+		if (l == null) {
+			// XXX existence of queue is used to mark lock as taken, but queue
+			// itself might never even be used
+			locked.put(lock, new LinkedList<>());
+			queue.add(e);
+		} else {
+			l.add(e);
+		}
 
 		return id;
 	}
@@ -233,6 +250,14 @@ public class Loxecutor {
 				Object v = ((TaskResult.ValueResult) r).value;
 				results.add(new Pair(e.id, v));
 				work.remove(e.id);
+				Queue<Execution> l = locked.get(e.lock);
+				if (l != null && !l.isEmpty()) {
+					Execution next = l.poll();
+					queue.add(next);
+					if (l.isEmpty()) {
+						locked.remove(e.lock);
+					}
+				}
 			} else if (r instanceof TaskResult.ErrorResult) {
 				TaskError v = ((TaskResult.ErrorResult) r).error;
 				results.add(new Pair(e.id, v));
@@ -262,6 +287,7 @@ public class Loxecutor {
 	 * @throws InterruptedException
 	 */
 	public synchronized void shutdown() throws InterruptedException {
+		// XXX - if already no work left this never returns
 		shutdown.set(true);
 		wait();
 	}
