@@ -6,7 +6,7 @@ package threadless;
  * @author phil
  * @param <T>
  */
-public interface Task<T> {
+public interface ActorTask {
 
-	public abstract TaskResult<T> call(TaskContext<T> ctx);
+	public abstract ActorResult call(ActorContext ctx);
 }

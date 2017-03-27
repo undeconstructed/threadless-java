@@ -10,10 +10,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with
- * queueing/ratelimiting/etc per whole system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
+ * system and per context.
  * 
  * @author phil
  */
@@ -24,7 +25,9 @@ public class Loxecutor {
 	 */
 	public interface LoxCtl {
 
-		public abstract <T> String submit(String lock, Task<T> task);
+		public abstract void actor(String lock, Supplier<ActorTask> task, Object input);
+
+		public abstract <T> String submit(String lock, ExecutionTask<T> task);
 
 		public abstract void notify(String key, Object object);
 	}
@@ -50,31 +53,30 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Tracks the execution of a task. Since the context lasts through all
-	 * invocations in a task, it makes some sense for these to be the same
-	 * thing.
+	 * Tracks the execution of a task. Since the context lasts through all invocations in a task, it makes some sense
+	 * for these to be the same thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
-	class Execution implements TaskContext {
+	class Execution implements ExecutionContext {
 
 		private final String id;
 		private final String lock;
-		private Task<?> task;
+		private ExecutionTask<?> task;
 		private Map<String, Object> keys;
 
-		public Execution(String id, String lock, Task<?> task) {
+		public Execution(String id, String lock, ExecutionTask<?> task) {
 			this.id = id;
 			this.lock = lock;
 			this.task = task;
 		}
 
-		public TaskResult invoke() {
+		public ExecutionResult invoke() {
 			try {
-				TaskResult result = task.call(this);
+				ExecutionResult result = task.call(this);
 				keys = null;
 				return result;
 			} catch (Exception e) {
-				return new TaskResult.ErrorResult(new TaskError(e.getMessage()));
+				return new ExecutionResult.ErrorResult(new TaskError(e.getMessage()));
 			}
 		}
 
@@ -135,18 +137,68 @@ public class Loxecutor {
 		}
 
 		@Override
-		public TaskResult v(Object result) {
-			return new TaskResult.ValueResult(result);
+		public ExecutionResult v(Object result) {
+			return new ExecutionResult.ValueResult(result);
 		}
 
 		@Override
-		public TaskResult e(TaskError error) {
-			return new TaskResult.ErrorResult(error);
+		public ExecutionResult e(TaskError error) {
+			return new ExecutionResult.ErrorResult(error);
 		}
 
 		@Override
-		public TaskResult c(TaskContinuation task) {
-			return new TaskResult.ContinuationResult(task, keys);
+		public ExecutionResult c(ExecutionContinuation task) {
+			return new ExecutionResult.ContinuationResult(task, keys);
+		}
+	}
+
+	/**
+	 * Tracks the execution of an actor.
+	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	class Actor implements ActorContext {
+
+		private final String id;
+		private ActorTask task;
+		public List<Object> inputs = new LinkedList<>();
+
+		public Actor(String id, ActorTask task) {
+			this.id = id;
+			this.task = task;
+		}
+
+		public ActorResult invoke() {
+			try {
+				ActorResult result = task.call(this);
+				return result;
+			} catch (Exception e) {
+				return new ActorResult.ErrorResult(new TaskError(e.getMessage()));
+			}
+		}
+
+		@Override
+		public String id() {
+			return id;
+		}
+
+		@Override
+		public void spawn() {
+			// TODO Auto-generated method stub
+		}
+
+		@Override
+		public ActorResult s(ActorSleeper task) {
+			return new ActorResult.SleepResult(task);
+		}
+
+		@Override
+		public ActorResult e(TaskError error) {
+			return new ActorResult.ErrorResult(error);
+		}
+
+		@Override
+		public ActorResult c(ActorContinuation task) {
+			return new ActorResult.ContinuationResult(task);
 		}
 	}
 
@@ -154,6 +206,7 @@ public class Loxecutor {
 	private final LoxCallback callback;
 	private long n = 0, c = 0;
 	private Map<String, Execution> work = new HashMap<>();
+	private Map<String, Actor> actors = new HashMap<>();
 	private Map<String, Execution> blocked = new HashMap<>();
 	private Map<String, Queue<Execution>> locked = new HashMap<>();
 	private Queue<Execution> queue = new LinkedList<>();
@@ -177,12 +230,17 @@ public class Loxecutor {
 		thread.execute(() -> {
 			work.call(new LoxCtl() {
 				@Override
+				public void actor(String id, Supplier<ActorTask> supplier, Object input) {
+					Loxecutor.this.actor0(id, supplier, input);
+				}
+
+				@Override
 				public void notify(String key, Object object) {
 					Loxecutor.this.notify(key, object);
 				}
 
 				@Override
-				public <T> String submit(String lock, Task<T> task) {
+				public <T> String submit(String lock, ExecutionTask<T> task) {
 					return Loxecutor.this.submit0(lock, task);
 				}
 			});
@@ -192,18 +250,39 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the
-	 * {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
-	public <T> Future<String> submit(String lock, Task<T> task) {
+	public <T> Future<String> submit(String lock, ExecutionTask<T> task) {
 		return thread.submit(() -> {
 			return Loxecutor.this.submit0(lock, task);
 		});
 	}
 
-	private <T> String submit0(String lock, Task<T> task) {
+	/**
+	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * 
+	 * @param work
+	 */
+	public Future<Void> actor(String id, Supplier<ActorTask> supplier, Object input) {
+		return thread.submit(() -> {
+			Loxecutor.this.actor0(id, supplier, input);
+			return null;
+		});
+	}
+
+	private <T> String actor0(String id, Supplier<ActorTask> supplier, Object input) {
+		Actor actor = actors.get(id);
+		if (actor == null) {
+			ActorTask task = supplier.get();
+			actor = new Actor(id, task);
+		}
+		actor.inputs.add(input);
+		return null;
+	}
+
+	private <T> String submit0(String lock, ExecutionTask<T> task) {
 		n++;
 		String id = Long.toString(n);
 
@@ -245,9 +324,9 @@ public class Loxecutor {
 				break;
 			}
 
-			TaskResult r = e.invoke();
-			if (r instanceof TaskResult.ValueResult) {
-				Object v = ((TaskResult.ValueResult) r).value;
+			ExecutionResult r = e.invoke();
+			if (r instanceof ExecutionResult.ValueResult) {
+				Object v = ((ExecutionResult.ValueResult) r).value;
 				results.add(new Pair(e.id, v));
 				work.remove(e.id);
 				Queue<Execution> l = locked.get(e.lock);
@@ -258,13 +337,13 @@ public class Loxecutor {
 						locked.remove(e.lock);
 					}
 				}
-			} else if (r instanceof TaskResult.ErrorResult) {
-				TaskError v = ((TaskResult.ErrorResult) r).error;
+			} else if (r instanceof ExecutionResult.ErrorResult) {
+				TaskError v = ((ExecutionResult.ErrorResult) r).error;
 				results.add(new Pair(e.id, v));
 				work.remove(e.id);
-			} else if (r instanceof TaskResult.ContinuationResult) {
-				e.keys = ((TaskResult.ContinuationResult) r).keys;
-				e.task = (x) -> ((TaskResult.ContinuationResult) r).task.call();
+			} else if (r instanceof ExecutionResult.ContinuationResult) {
+				e.keys = ((ExecutionResult.ContinuationResult) r).keys;
+				e.task = (x) -> ((ExecutionResult.ContinuationResult) r).task.call();
 				for (String key : e.keys.keySet()) {
 					blocked.put(key, e);
 				}

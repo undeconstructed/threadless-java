@@ -6,7 +6,7 @@ import java.util.concurrent.Executors;
 
 import threadless.Loxecutor;
 import threadless.Pair;
-import threadless.TaskContext;
+import threadless.ExecutionContext;
 import threadless.TaskExternal;
 import threadless.TaskFuture;
 
@@ -28,7 +28,7 @@ class SlowThing {
 		});
 	}
 
-	public TaskFuture<String> doSlowThingForFuture(TaskContext ctx) {
+	public TaskFuture<String> doSlowThingForFuture(ExecutionContext ctx) {
 		int s = r.nextInt(3000);
 		TaskFuture<String> f = ctx.fut();
 		e.submit(() -> {
