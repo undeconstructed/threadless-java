@@ -52,4 +52,7 @@ public abstract class ExecutionResult<T> extends Result {
 			return Type.EXECUTION_CONTINUATION;
 		}
 	}
+
+	private ExecutionResult() {
+	}
 }

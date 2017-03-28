@@ -48,4 +48,7 @@ public abstract class ActorResult extends Result {
 			return Type.ACTOR_CONTINUATION;
 		}
 	}
+
+	private ActorResult() {
+	}
 }

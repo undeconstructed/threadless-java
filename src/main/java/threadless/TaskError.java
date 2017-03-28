@@ -9,7 +9,7 @@ public class TaskError {
 
 	public final String message;
 
-	TaskError(String message) {
+	public TaskError(String message) {
 		this.message = message;
 	}
 }

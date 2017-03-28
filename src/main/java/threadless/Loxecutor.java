@@ -1,6 +1,5 @@
 package threadless;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -13,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
- * system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with
+ * queueing/ratelimiting/etc per whole system and per context.
  * 
  * @author phil
  */
@@ -49,15 +48,24 @@ public class Loxecutor {
 	 */
 	public interface LoxCallback {
 
-		public abstract void call(List<Pair<String, Object>> results);
+		public abstract void call(String key, Object result);
 	}
 
 	/**
-	 * Tracks the execution of a task. Since the context lasts through all invocations in a task, it makes some sense
-	 * for these to be the same thing.
+	 * TODO
+	 */
+	interface Executable {
+
+		public abstract Result invoke();
+	}
+
+	/**
+	 * Tracks the execution of a task. Since the context lasts through all
+	 * invocations in a task, it makes some sense for these to be the same
+	 * thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
-	class Execution implements ExecutionContext {
+	class Execution implements Executable, ExecutionContext {
 
 		private final String id;
 		private final String lock;
@@ -70,12 +78,14 @@ public class Loxecutor {
 			this.task = task;
 		}
 
-		public ExecutionResult invoke() {
+		@Override
+		public Result invoke() {
 			try {
 				ExecutionResult result = task.call(this);
 				keys = null;
 				return result;
 			} catch (Exception e) {
+				e.printStackTrace();
 				return new ExecutionResult.ErrorResult(new TaskError(e.getMessage()));
 			}
 		}
@@ -152,26 +162,62 @@ public class Loxecutor {
 		}
 	}
 
-	/**
-	 * Tracks the execution of an actor.
-	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	class Actor implements ActorContext {
+	@SuppressWarnings("rawtypes")
+	static class Spawn {
 
-		private final String id;
-		private ActorTask task;
-		public List<Object> inputs = new LinkedList<>();
+		public String lock;
+		public ExecutionTask task;
 
-		public Actor(String id, ActorTask task) {
-			this.id = id;
+		public String id;
+		public Supplier<ActorTask> supplier;
+		public Object input;
+
+		public Spawn(String lock, ExecutionTask task) {
+			this.lock = lock;
 			this.task = task;
 		}
 
-		public ActorResult invoke() {
+		public Spawn(String id, Supplier<ActorTask> supplier, Object input) {
+			this.id = id;
+			this.supplier = supplier;
+			this.input = input;
+		}
+	}
+
+	/**
+	 * Tracks the execution of an actor.
+	 */
+	class Actor implements Executable, ActorContext {
+
+		// unique id
+		private final String id;
+		// how to create the initial actor task
+		private final Supplier<ActorTask> supplier;
+		// the current actor task
+		private ActorTask task;
+		// the current actor sleeper, if this actor is sleeping
+		private ActorSleeper sleeper;
+		// the spawns created during an execution
+		public List<Spawn> spawns;
+		// queued up inputs
+		public Queue<Object> inputs = new LinkedList<>();
+
+		public Actor(String id, Supplier<ActorTask> supplier) {
+			this.id = id;
+			this.supplier = supplier;
+		}
+
+		@Override
+		public Result invoke() {
+			if (task == null) {
+				task = supplier.get();
+			}
+
 			try {
 				ActorResult result = task.call(this);
 				return result;
 			} catch (Exception e) {
+				e.printStackTrace();
 				return new ActorResult.ErrorResult(new TaskError(e.getMessage()));
 			}
 		}
@@ -182,8 +228,19 @@ public class Loxecutor {
 		}
 
 		@Override
-		public void spawn() {
-			// TODO Auto-generated method stub
+		public void actor(String id, Supplier<ActorTask> supplier, Object input) {
+			if (spawns == null) {
+				spawns = new LinkedList<>();
+			}
+			spawns.add(new Spawn(id, supplier, input));
+		}
+
+		@Override
+		public <T> void submit(String lock, ExecutionTask<T> task) {
+			if (spawns == null) {
+				spawns = new LinkedList<>();
+			}
+			spawns.add(new Spawn(lock, task));
 		}
 
 		@Override
@@ -202,14 +259,23 @@ public class Loxecutor {
 		}
 	}
 
+	// thread in which all Loxecutor work must be done
 	private final ExecutorService thread = Executors.newSingleThreadExecutor();
+	// callback for all Loxecutor outputs
 	private final LoxCallback callback;
+	// n and c ...
 	private long n = 0, c = 0;
+	// executions in progress, keyed by their id
 	private Map<String, Execution> work = new HashMap<>();
+	// actors, keyed by their id
 	private Map<String, Actor> actors = new HashMap<>();
-	private Map<String, Execution> blocked = new HashMap<>();
+	// everything that is currently waiting for, keyed by the notification
+	private Map<String, Execution> waiters = new HashMap<>();
+	// executions that cannot be run because their lock is taken, keyed by lock
 	private Map<String, Queue<Execution>> locked = new HashMap<>();
-	private Queue<Execution> queue = new LinkedList<>();
+	// everything that is currently runnable
+	private Queue<Executable> queue = new LinkedList<>();
+	// flag for signalling shutdown
 	private AtomicBoolean shutdown = new AtomicBoolean(false);
 
 	/**
@@ -228,58 +294,43 @@ public class Loxecutor {
 	 */
 	public void execute(LoxCtlTask work) {
 		thread.execute(() -> {
-			work.call(new LoxCtl() {
-				@Override
-				public void actor(String id, Supplier<ActorTask> supplier, Object input) {
-					Loxecutor.this.actor0(id, supplier, input);
-				}
+			try {
+				work.call(new LoxCtl() {
+					@Override
+					public void actor(String id, Supplier<ActorTask> supplier, Object input) {
+						Loxecutor.this.actor0(id, supplier, input);
+					}
 
-				@Override
-				public void notify(String key, Object object) {
-					Loxecutor.this.notify(key, object);
-				}
+					@Override
+					public void notify(String key, Object object) {
+						Loxecutor.this.notify(key, object);
+					}
 
-				@Override
-				public <T> String submit(String lock, ExecutionTask<T> task) {
-					return Loxecutor.this.submit0(lock, task);
-				}
-			});
+					@Override
+					public <T> String submit(String lock, ExecutionTask<T> task) {
+						return Loxecutor.this.submit0(lock, task);
+					}
+				});
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
 
 			thread.execute(this::cycle);
 		});
 	}
 
 	/**
-	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the
+	 * {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
 	public <T> Future<String> submit(String lock, ExecutionTask<T> task) {
 		return thread.submit(() -> {
+			thread.execute(this::cycle);
 			return Loxecutor.this.submit0(lock, task);
 		});
-	}
-
-	/**
-	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
-	 * 
-	 * @param work
-	 */
-	public Future<Void> actor(String id, Supplier<ActorTask> supplier, Object input) {
-		return thread.submit(() -> {
-			Loxecutor.this.actor0(id, supplier, input);
-			return null;
-		});
-	}
-
-	private <T> String actor0(String id, Supplier<ActorTask> supplier, Object input) {
-		Actor actor = actors.get(id);
-		if (actor == null) {
-			ActorTask task = supplier.get();
-			actor = new Actor(id, task);
-		}
-		actor.inputs.add(input);
-		return null;
 	}
 
 	private <T> String submit0(String lock, ExecutionTask<T> task) {
@@ -301,8 +352,41 @@ public class Loxecutor {
 		return id;
 	}
 
+	/**
+	 * Submit a task. This is made threadsafe by running in the context of the
+	 * {@link Loxecutor}.
+	 * 
+	 * @param work
+	 */
+	public Future<Void> actor(String id, Supplier<ActorTask> supplier, Object input) {
+		return thread.submit(() -> {
+			thread.execute(this::cycle);
+			Loxecutor.this.actor0(id, supplier, input);
+			return null;
+		});
+	}
+
+	private <T> String actor0(String id, Supplier<ActorTask> supplier, Object input) {
+		Actor actor = actors.get(id);
+		if (actor == null) {
+			actor = new Actor(id, supplier);
+			actor.inputs.add(input);
+			actors.put(id, actor);
+			// schedule setup task, which will reschedule with first input
+			queue.add(actor);
+		} else if (actor.sleeper != null) {
+			Actor a = actor;
+			actor.task = (x) -> a.sleeper.call(input);
+			actor.sleeper = null;
+		} else {
+			actor.inputs.add(input);
+		}
+
+		return null;
+	}
+
 	private void notify(String key, Object object) {
-		Execution e = blocked.remove(key);
+		Execution e = waiters.remove(key);
 		if (e != null) {
 			e.keys.put(key, object);
 			for (Map.Entry<String, Object> k : e.keys.entrySet()) {
@@ -314,50 +398,132 @@ public class Loxecutor {
 		}
 	}
 
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private void cycle() {
-		List<Pair<String, Object>> results = new ArrayList<>();
+		try {
+			cycle0();
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
 
-		while (true) {
-			Execution e = queue.poll();
-			if (e == null) {
-				break;
-			}
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	private void cycle0() {
+		Pair<String, Object> result = null;
 
-			ExecutionResult r = e.invoke();
-			if (r instanceof ExecutionResult.ValueResult) {
-				Object v = ((ExecutionResult.ValueResult) r).value;
-				results.add(new Pair(e.id, v));
-				work.remove(e.id);
-				Queue<Execution> l = locked.get(e.lock);
-				if (l != null && !l.isEmpty()) {
+		Executable e0 = queue.poll();
+		if (e0 == null) {
+			return;
+		}
+
+		Result r0 = e0.invoke();
+
+		switch (r0.type()) {
+		case EXECUTION_VALUE: {
+			Execution e = (Execution) e0;
+			ExecutionResult.ValueResult r = (ExecutionResult.ValueResult) r0;
+			Object v = r.value;
+			result = new Pair(e.id, v);
+			work.remove(e.id);
+			Queue<Execution> l = locked.get(e.lock);
+			if (l != null) {
+				if (!l.isEmpty()) {
 					Execution next = l.poll();
 					queue.add(next);
-					if (l.isEmpty()) {
-						locked.remove(e.lock);
+				}
+				if (l.isEmpty()) {
+					locked.remove(e.lock);
+				}
+			}
+			break;
+		}
+		case EXECUTION_ERROR: {
+			Execution e = (Execution) e0;
+			ExecutionResult.ErrorResult r = (ExecutionResult.ErrorResult) r0;
+			TaskError v = r.error;
+			result = new Pair(e.id, v);
+			work.remove(e.id);
+			// TODO check queue
+			break;
+		}
+		case EXECUTION_CONTINUATION: {
+			Execution e = (Execution) e0;
+			ExecutionResult.ContinuationResult r = (ExecutionResult.ContinuationResult) r0;
+			e.keys = r.keys;
+			e.task = (x) -> r.task.call();
+			for (String key : e.keys.keySet()) {
+				waiters.put(key, e);
+			}
+			break;
+		}
+		case ACTOR_SLEEP: {
+			Actor a = (Actor) e0;
+			ActorResult.SleepResult r = (ActorResult.SleepResult) r0;
+
+			if (a.spawns != null) {
+				for (Spawn spawn : a.spawns) {
+					if (spawn.lock != null) {
+						submit0(spawn.lock, spawn.task);
+					} else if (spawn.id == null) {
+						actor0(spawn.id, spawn.supplier, spawn.input);
 					}
 				}
-			} else if (r instanceof ExecutionResult.ErrorResult) {
-				TaskError v = ((ExecutionResult.ErrorResult) r).error;
-				results.add(new Pair(e.id, v));
-				work.remove(e.id);
-			} else if (r instanceof ExecutionResult.ContinuationResult) {
-				e.keys = ((ExecutionResult.ContinuationResult) r).keys;
-				e.task = (x) -> ((ExecutionResult.ContinuationResult) r).task.call();
-				for (String key : e.keys.keySet()) {
-					blocked.put(key, e);
-				}
+				a.spawns = null;
 			}
+
+			Object input = a.inputs.poll();
+			if (input != null) {
+				a.task = (x) -> r.task.call(input);
+				queue.add(a);
+			} else {
+				a.sleeper = r.task;
+			}
+
+			break;
+		}
+		case ACTOR_ERROR: {
+			Actor a = (Actor) e0;
+			ActorResult.ErrorResult r = (ActorResult.ErrorResult) r0;
+			// TODO hmm
+			System.out.println("cannot handle actor errors");
+			System.exit(1);
+			break;
+		}
+		case ACTOR_CONTINUATION: {
+			Actor a = (Actor) e0;
+			ActorResult.ContinuationResult r = (ActorResult.ContinuationResult) r0;
+			// TODO hmm
+			System.out.println("cannot handle actor continuations");
+			System.exit(1);
+			break;
+		}
 		}
 
-		callback.call(results);
-
-		if (work.isEmpty() && shutdown.get()) {
-			synchronized (this) {
-				thread.shutdown();
-				this.notify();
-			}
+		if (result != null) {
+			invokeCallback(result);
 		}
+
+		if (!queue.isEmpty()) {
+			thread.execute(this::cycle);
+		}
+		// TODO - detect no more actor inputs
+		// if (work.isEmpty() && shutdown.get()) {
+		// synchronized (this) {
+		// thread.shutdown();
+		// this.notify();
+		// }
+		// }
+	}
+
+	private void invokeCallback(Pair<String, Object> cbr) {
+		thread.execute(() -> {
+			try {
+				callback.call(cbr.a, cbr.b);
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		});
 	}
 
 	/**
