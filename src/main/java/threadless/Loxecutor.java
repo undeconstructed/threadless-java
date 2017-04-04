@@ -26,7 +26,7 @@ public class Loxecutor {
 
 		public abstract void actor(String lock, Supplier<ActorTask> task, Object input);
 
-		public abstract <T> String submit(String lock, ExecutionTask<T> task);
+		public abstract String submit(String lock, ExecutionTask task);
 
 		public abstract void notify(String key, Object object);
 	}
@@ -69,10 +69,10 @@ public class Loxecutor {
 
 		private final String id;
 		private final String lock;
-		private ExecutionTask<?> task;
+		private ExecutionTask task;
 		private Map<String, Object> keys;
 
-		public Execution(String id, String lock, ExecutionTask<?> task) {
+		public Execution(String id, String lock, ExecutionTask task) {
 			this.id = id;
 			this.lock = lock;
 			this.task = task;
@@ -236,7 +236,7 @@ public class Loxecutor {
 		}
 
 		@Override
-		public <T> void submit(String lock, ExecutionTask<T> task) {
+		public void submit(String lock, ExecutionTask task) {
 			if (spawns == null) {
 				spawns = new LinkedList<>();
 			}
@@ -307,7 +307,7 @@ public class Loxecutor {
 					}
 
 					@Override
-					public <T> String submit(String lock, ExecutionTask<T> task) {
+					public String submit(String lock, ExecutionTask task) {
 						return Loxecutor.this.submit0(lock, task);
 					}
 				});
@@ -326,14 +326,14 @@ public class Loxecutor {
 	 * 
 	 * @param work
 	 */
-	public <T> Future<String> submit(String lock, ExecutionTask<T> task) {
+	public <T> Future<String> submit(String lock, ExecutionTask task) {
 		return thread.submit(() -> {
 			thread.execute(this::cycle);
 			return Loxecutor.this.submit0(lock, task);
 		});
 	}
 
-	private <T> String submit0(String lock, ExecutionTask<T> task) {
+	private <T> String submit0(String lock, ExecutionTask task) {
 		n++;
 		String id = Long.toString(n);
 

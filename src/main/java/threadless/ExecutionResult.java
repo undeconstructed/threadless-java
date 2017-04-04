@@ -39,10 +39,10 @@ public abstract class ExecutionResult<T> extends Result {
 
 	static class ContinuationResult<T> extends ExecutionResult<T> {
 
-		final ExecutionContinuation<T> task;
+		final ExecutionContinuation task;
 		final Map<String, Object> keys;
 
-		ContinuationResult(ExecutionContinuation<T> task, Map<String, Object> keys) {
+		ContinuationResult(ExecutionContinuation task, Map<String, Object> keys) {
 			this.keys = keys;
 			this.task = task;
 		}

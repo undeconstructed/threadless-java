@@ -6,7 +6,7 @@ package threadless;
  * @author phil
  * @param <T>
  */
-public interface ExecutionContinuation<T> {
+public interface ExecutionContinuation {
 
-	public abstract ExecutionResult<T> call();
+	public abstract ExecutionResult<?> call();
 }

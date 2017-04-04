@@ -30,7 +30,7 @@ public interface ActorContext {
 	 * @param lock
 	 * @param task
 	 */
-	public abstract <T> void submit(String lock, ExecutionTask<T> task);
+	public abstract <T> void submit(String lock, ExecutionTask task);
 
 	/**
 	 * Get a sleep result to return. This implies the actor is ready for more input.
