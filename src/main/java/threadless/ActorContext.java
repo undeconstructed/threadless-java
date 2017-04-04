@@ -1,13 +1,11 @@
 package threadless;
 
-import java.util.function.Supplier;
-
 /**
  * The context in which a task runs. This follows the initial and subsequent invocations of a task.
  *
  * @author phil
  */
-public interface ActorContext {
+public interface ActorContext extends Context {
 
 	/**
 	 * Id of this context.
@@ -15,22 +13,6 @@ public interface ActorContext {
 	 * @return
 	 */
 	public abstract String id();
-
-	/**
-	 * Spawn or notify another actor.
-	 * 
-	 * @param id
-	 * @param task
-	 * @param input
-	 */
-	public abstract void actor(String id, Supplier<ActorTask> task, Object input);
-
-	/**
-	 * 
-	 * @param lock
-	 * @param task
-	 */
-	public abstract <T> void submit(String lock, ExecutionTask task);
 
 	/**
 	 * Get a sleep result to return. This implies the actor is ready for more input.

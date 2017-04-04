@@ -34,13 +34,13 @@ class SlowThing {
 
 	public TaskFuture<String> doSlowThingForFuture(ExecutionContext ctx) {
 		int s = r.nextInt(3000);
-		TaskFuture<String> f = ctx.fut();
+		TaskExternal<String> ext = ctx.ext();
 		e.submit(() -> {
 			Thread.sleep(s);
-			f.notify(String.valueOf(s));
+			ext.notify(String.valueOf(s));
 			return true;
 		});
-		return f;
+		return ext.future();
 	}
 }
 

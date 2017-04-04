@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with
- * queueing/ratelimiting/etc per whole system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
+ * system and per context.
  * 
  * @author phil
  */
@@ -60,9 +60,8 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Tracks the execution of a task. Since the context lasts through all
-	 * invocations in a task, it makes some sense for these to be the same
-	 * thing.
+	 * Tracks the execution of a task. Since the context lasts through all invocations in a task, it makes some sense
+	 * for these to be the same thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	class Execution implements Executable, ExecutionContext {
@@ -96,31 +95,13 @@ public class Loxecutor {
 		}
 
 		@Override
-		public TaskFuture fut() {
-			String key = ext0();
-			return new TaskFuture() {
-				@Override
-				public boolean isError() {
-					return false;
-				}
+		public void actor(String id, Supplier<ActorTask> task, Object input) {
+			throw new RuntimeException("not implemented");
+		}
 
-				@Override
-				public TaskError error() {
-					return null;
-				}
-
-				@Override
-				public Object value() {
-					return Execution.this.keys.get(key);
-				}
-
-				@Override
-				public void notify(Object value) {
-					Loxecutor.this.execute(ctl -> {
-						ctl.notify(key, value);
-					});
-				}
-			};
+		@Override
+		public <T> TaskFuture<T> submit(String lock, ExecutionTask task) {
+			throw new RuntimeException("not implemented");
 		}
 
 		private String ext0() {
@@ -137,6 +118,31 @@ public class Loxecutor {
 		public TaskExternal ext() {
 			String key = ext0();
 			return new TaskExternal() {
+				@Override
+				public TaskFuture future() {
+					return new TaskFuture() {
+						@Override
+						public boolean isDone() {
+							return true;
+						}
+
+						@Override
+						public boolean isError() {
+							return false;
+						}
+
+						@Override
+						public TaskError error() {
+							return null;
+						}
+
+						@Override
+						public Object value() {
+							return Execution.this.keys.get(key);
+						}
+					};
+				}
+
 				@Override
 				public void notify(Object value) {
 					Loxecutor.this.execute(ctl -> {
@@ -162,7 +168,11 @@ public class Loxecutor {
 		}
 	}
 
-	@SuppressWarnings("rawtypes")
+	/**
+	 * For tracking what should be spawned as the result of an invocation.
+	 * 
+	 * @author phil
+	 */
 	static class Spawn {
 
 		public String lock;
@@ -236,11 +246,13 @@ public class Loxecutor {
 		}
 
 		@Override
-		public void submit(String lock, ExecutionTask task) {
+		public <T> TaskFuture<T> submit(String lock, ExecutionTask task) {
 			if (spawns == null) {
 				spawns = new LinkedList<>();
 			}
 			spawns.add(new Spawn(lock, task));
+			// TODO - link up a future here
+			return null;
 		}
 
 		@Override
@@ -321,8 +333,7 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit an actor. This is made threadsafe by running in the context of the
-	 * {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
@@ -353,8 +364,7 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the
-	 * {@link Loxecutor}.
+	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */

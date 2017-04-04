@@ -5,7 +5,7 @@ package threadless;
  *
  * @author phil
  */
-public interface ExecutionContext {
+public interface ExecutionContext extends Context {
 
 	/**
 	 * Id of this context.
@@ -13,11 +13,6 @@ public interface ExecutionContext {
 	 * @return
 	 */
 	public abstract String id();
-
-	/**
-	 * @return
-	 */
-	public abstract <T2> TaskFuture<T2> fut();
 
 	/**
 	 * Get a sort of context for allowing an external process to notify us.
