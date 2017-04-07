@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with
- * queueing/ratelimiting/etc per whole system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
+ * system and per context.
  * 
  * @author phil
  */
@@ -57,6 +57,8 @@ public class Loxecutor {
 	interface Executable {
 
 		public abstract Result invoke();
+
+		public abstract boolean notify(String key, Object object);
 	}
 
 	/**
@@ -64,7 +66,9 @@ public class Loxecutor {
 	 */
 	class Executor {
 
+		// lock this executor is guarding
 		public final String lock;
+		// currently active execution
 		private Execution active;
 		// executions that are waiting on this lock
 		private Queue<Execution> queue = new LinkedList<>();
@@ -75,16 +79,16 @@ public class Loxecutor {
 		}
 
 		/**
-		 * Adds an {@link Execution}, and returns whether it makes us
-		 * schedulable.
+		 * Adds an {@link Execution}, and returns whether it makes us schedulable.
 		 */
 		public void add(String id, ExecutionTask task) {
 			Execution e = new Execution(this, id, task);
-			if (active == null) {
-				queue.add(e);
-			}
+			queue.add(e);
 		}
 
+		/**
+		 * If nothing is active, this makes the next from the queue active, and returns it to be scheduled.
+		 */
 		public Execution getExecutionToSchedule() {
 			if (active == null) {
 				active = queue.poll();
@@ -102,16 +106,19 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Tracks the execution of a task. Since the context lasts through all
-	 * invocations in a task, it makes some sense for these to be the same
-	 * thing.
+	 * Tracks the execution of a task. Since the context lasts through all invocations in a task, it makes some sense
+	 * for these to be the same thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	class Execution implements Executable, ExecutionContext {
 
+		// which executor is managing this execution
 		private final Executor executor;
+		// unique id of this execution
 		private final String id;
+		// next task to be run
 		private ExecutionTask task;
+		// keys to wait on, if currently waiting
 		private Map<String, Object> keys;
 
 		public Execution(Executor executor, String id, ExecutionTask task) {
@@ -124,7 +131,6 @@ public class Loxecutor {
 		public Result invoke() {
 			try {
 				ExecutionResult result = task.call(this);
-				keys = null;
 				return result;
 			} catch (Exception e) {
 				e.printStackTrace();
@@ -196,6 +202,17 @@ public class Loxecutor {
 		}
 
 		@Override
+		public boolean notify(String key, Object object) {
+			keys.put(key, object);
+			for (Map.Entry<String, Object> k : keys.entrySet()) {
+				if (k.getValue() == null) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		@Override
 		public ExecutionResult v(Object result) {
 			return new ExecutionResult.ValueResult(result);
 		}
@@ -207,7 +224,7 @@ public class Loxecutor {
 
 		@Override
 		public ExecutionResult c(ExecutionContinuation task) {
-			return new ExecutionResult.ContinuationResult(task, keys);
+			return new ExecutionResult.ContinuationResult(task);
 		}
 	}
 
@@ -255,6 +272,8 @@ public class Loxecutor {
 		// queued up inputs
 		public Queue<Object> inputs = new LinkedList<>();
 
+		private Map<String, Object> keys;
+
 		public Actor(String id, Supplier<ActorTask> supplier) {
 			this.id = id;
 			this.supplier = supplier;
@@ -299,6 +318,17 @@ public class Loxecutor {
 		}
 
 		@Override
+		public boolean notify(String key, Object object) {
+			keys.put(key, object);
+			for (Map.Entry<String, Object> k : keys.entrySet()) {
+				if (k.getValue() == null) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		@Override
 		public ActorResult s(ActorSleeper task) {
 			return new ActorResult.SleepResult(task);
 		}
@@ -325,7 +355,7 @@ public class Loxecutor {
 	// actors, keyed by their id
 	private Map<String, Actor> actors = new HashMap<>();
 	// everything that is currently waiting for, keyed by the notification
-	private Map<String, Execution> waiters = new HashMap<>();
+	private Map<String, Executable> waiters = new HashMap<>();
 	// everything that is currently runnable
 	private Queue<Executable> queue = new LinkedList<>();
 	// flag for signalling shutdown
@@ -374,8 +404,7 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit an actor. This is made threadsafe by running in the context of the
-	 * {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
@@ -406,8 +435,7 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the
-	 * {@link Loxecutor}.
+	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
@@ -439,15 +467,11 @@ public class Loxecutor {
 	}
 
 	private void notify(String key, Object object) {
-		Execution e = waiters.remove(key);
+		Executable e = waiters.remove(key);
 		if (e != null) {
-			e.keys.put(key, object);
-			for (Map.Entry<String, Object> k : e.keys.entrySet()) {
-				if (k.getValue() == null) {
-					return;
-				}
+			if (e.notify(key, object)) {
+				queue.add(e);
 			}
-			queue.add(e);
 		}
 	}
 
@@ -481,9 +505,8 @@ public class Loxecutor {
 			Executor er = e.executor;
 			er.onComplete(e);
 			Execution en = er.getExecutionToSchedule();
-
 			if (en != null) {
-				queue.add(e);
+				queue.add(en);
 			}
 			break;
 		}
@@ -496,17 +519,14 @@ public class Loxecutor {
 			Executor er = e.executor;
 			er.onComplete(e);
 			Execution en = er.getExecutionToSchedule();
-
 			if (en != null) {
 				queue.add(e);
 			}
-
 			break;
 		}
 		case EXECUTION_CONTINUATION: {
 			Execution e = (Execution) e0;
 			ExecutionResult.ContinuationResult r = (ExecutionResult.ContinuationResult) r0;
-			e.keys = r.keys;
 			e.task = (x) -> r.task.call();
 			for (String key : e.keys.keySet()) {
 				waiters.put(key, e);
@@ -549,9 +569,10 @@ public class Loxecutor {
 		case ACTOR_CONTINUATION: {
 			Actor a = (Actor) e0;
 			ActorResult.ContinuationResult r = (ActorResult.ContinuationResult) r0;
-			// TODO hmm
-			System.out.println("cannot handle actor continuations");
-			System.exit(1);
+			a.task = (x) -> r.task.call();
+			for (String key : a.keys.keySet()) {
+				waiters.put(key, a);
+			}
 			break;
 		}
 		}
@@ -563,8 +584,9 @@ public class Loxecutor {
 		if (!queue.isEmpty()) {
 			thread.execute(this::cycle);
 		}
-		// TODO - detect no more actor inputs
-		// if (work.isEmpty() && shutdown.get()) {
+
+		// TODO
+		// if (shutdown.get() && ...) {
 		// synchronized (this) {
 		// thread.shutdown();
 		// this.notify();

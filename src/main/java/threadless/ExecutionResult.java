@@ -1,7 +1,5 @@
 package threadless;
 
-import java.util.Map;
-
 /**
  * Various different types of result that can come from a task invocation.
  *
@@ -40,10 +38,8 @@ public abstract class ExecutionResult<T> extends Result {
 	static class ContinuationResult<T> extends ExecutionResult<T> {
 
 		final ExecutionContinuation task;
-		final Map<String, Object> keys;
 
-		ContinuationResult(ExecutionContinuation task, Map<String, Object> keys) {
-			this.keys = keys;
+		ContinuationResult(ExecutionContinuation task) {
 			this.task = task;
 		}
 
