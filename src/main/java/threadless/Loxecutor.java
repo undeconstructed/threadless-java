@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
- * system and per context.
+ * Loxecutor combines locking and execution, doing non-blocking concurrency with
+ * queueing/ratelimiting/etc per whole system and per context.
  * 
  * @author phil
  */
@@ -60,20 +60,63 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Tracks the execution of a task. Since the context lasts through all invocations in a task, it makes some sense
-	 * for these to be the same thing.
+	 * Manages a sequence of Executions waiting on the same lock.
+	 */
+	class Executor {
+
+		public final String lock;
+		private Execution active;
+		// executions that are waiting on this lock
+		private Queue<Execution> queue = new LinkedList<>();
+
+		public Executor(String lock) {
+			super();
+			this.lock = lock;
+		}
+
+		/**
+		 * Adds an {@link Execution}, and returns whether it makes us
+		 * schedulable.
+		 */
+		public void add(String id, ExecutionTask task) {
+			Execution e = new Execution(this, id, task);
+			if (active == null) {
+				queue.add(e);
+			}
+		}
+
+		public Execution getExecutionToSchedule() {
+			if (active == null) {
+				active = queue.poll();
+				if (active != null) {
+					return active;
+				}
+			}
+			return null;
+		}
+
+		public void onComplete(Execution e) {
+			assert e == active;
+			active = null;
+		}
+	}
+
+	/**
+	 * Tracks the execution of a task. Since the context lasts through all
+	 * invocations in a task, it makes some sense for these to be the same
+	 * thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	class Execution implements Executable, ExecutionContext {
 
+		private final Executor executor;
 		private final String id;
-		private final String lock;
 		private ExecutionTask task;
 		private Map<String, Object> keys;
 
-		public Execution(String id, String lock, ExecutionTask task) {
+		public Execution(Executor executor, String id, ExecutionTask task) {
+			this.executor = executor;
 			this.id = id;
-			this.lock = lock;
 			this.task = task;
 		}
 
@@ -277,14 +320,12 @@ public class Loxecutor {
 	private final LoxCallback callback;
 	// n and c ...
 	private long n = 0, c = 0;
-	// executions in progress, keyed by their id
-	private Map<String, Execution> work = new HashMap<>();
+	// executors, keyed by their locks
+	private Map<String, Executor> executors = new HashMap<>();
 	// actors, keyed by their id
 	private Map<String, Actor> actors = new HashMap<>();
 	// everything that is currently waiting for, keyed by the notification
 	private Map<String, Execution> waiters = new HashMap<>();
-	// executions that cannot be run because their lock is taken, keyed by lock
-	private Map<String, Queue<Execution>> locked = new HashMap<>();
 	// everything that is currently runnable
 	private Queue<Executable> queue = new LinkedList<>();
 	// flag for signalling shutdown
@@ -333,7 +374,8 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the
+	 * {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
@@ -345,26 +387,27 @@ public class Loxecutor {
 	}
 
 	private <T> String submit0(String lock, ExecutionTask task) {
+		Executor er = executors.get(lock);
+		if (er == null) {
+			er = new Executor(lock);
+			executors.put(lock, er);
+		}
+
 		n++;
 		String id = Long.toString(n);
 
-		Execution e = new Execution(id, lock, task);
-		work.put(id, e);
-		Queue<Execution> l = locked.get(lock);
-		if (l == null) {
-			// XXX existence of queue is used to mark lock as taken, but queue
-			// itself might never even be used
-			locked.put(lock, new LinkedList<>());
+		er.add(id, task);
+		Execution e = er.getExecutionToSchedule();
+		if (e != null) {
 			queue.add(e);
-		} else {
-			l.add(e);
 		}
 
 		return id;
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * Submit a task. This is made threadsafe by running in the context of the
+	 * {@link Loxecutor}.
 	 * 
 	 * @param work
 	 */
@@ -434,16 +477,13 @@ public class Loxecutor {
 			ExecutionResult.ValueResult r = (ExecutionResult.ValueResult) r0;
 			Object v = r.value;
 			result = new Pair(e.id, v);
-			work.remove(e.id);
-			Queue<Execution> l = locked.get(e.lock);
-			if (l != null) {
-				if (!l.isEmpty()) {
-					Execution next = l.poll();
-					queue.add(next);
-				}
-				if (l.isEmpty()) {
-					locked.remove(e.lock);
-				}
+
+			Executor er = e.executor;
+			er.onComplete(e);
+			Execution en = er.getExecutionToSchedule();
+
+			if (en != null) {
+				queue.add(e);
 			}
 			break;
 		}
@@ -452,8 +492,15 @@ public class Loxecutor {
 			ExecutionResult.ErrorResult r = (ExecutionResult.ErrorResult) r0;
 			TaskError v = r.error;
 			result = new Pair(e.id, v);
-			work.remove(e.id);
-			// TODO check queue
+
+			Executor er = e.executor;
+			er.onComplete(e);
+			Execution en = er.getExecutionToSchedule();
+
+			if (en != null) {
+				queue.add(e);
+			}
+
 			break;
 		}
 		case EXECUTION_CONTINUATION: {
