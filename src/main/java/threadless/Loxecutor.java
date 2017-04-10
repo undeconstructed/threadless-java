@@ -1,5 +1,6 @@
 package threadless;
 
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -10,6 +11,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+
+import threadless.Result.Type;
 
 /**
  * Loxecutor combines locking and execution, doing non-blocking concurrency with queueing/ratelimiting/etc per whole
@@ -62,6 +65,33 @@ public class Loxecutor {
 	}
 
 	/**
+	 * Tracks the average of the last n numbers it was given. Is not accurate at the start.
+	 * 
+	 * @author phil
+	 */
+	static class RecentAverage {
+
+		private long[] ts;
+		private int n;
+
+		public RecentAverage(int size) {
+			ts = new long[size];
+		}
+
+		public long update(long t) {
+			ts[n] = t;
+			n = (n + 1) % ts.length;
+			long s = 0;
+			for (int i = 0; i < ts.length; i++) {
+				s += ts[i];
+			}
+			return s / ts.length;
+		}
+	}
+
+	private static final int HOW_MANY_TIME_SAMPLES = 4;
+
+	/**
 	 * Manages a sequence of Executions waiting on the same lock.
 	 */
 	class Executor {
@@ -72,10 +102,13 @@ public class Loxecutor {
 		private Execution active;
 		// executions that are waiting on this lock
 		private Queue<Execution> queue = new LinkedList<>();
+		// for tracking execution times
+		private RecentAverage timings;
 
 		public Executor(String lock) {
 			super();
 			this.lock = lock;
+			this.timings = new RecentAverage(HOW_MANY_TIME_SAMPLES);
 		}
 
 		/**
@@ -102,6 +135,8 @@ public class Loxecutor {
 		public void onComplete(Execution e) {
 			assert e == active;
 			active = null;
+			long avg = timings.update(clock.millis() - e.tFirstRun);
+			System.out.format("lock %s average %dms%n", lock, avg);
 		}
 	}
 
@@ -120,22 +155,41 @@ public class Loxecutor {
 		private ExecutionTask task;
 		// keys to wait on, if currently waiting
 		private Map<String, Object> keys;
+		// timings
+		private long tCreated, tFirstScheduled, tFirstRun, tTotalRunning, tStartedWaiting, tTotalWaiting;
 
 		public Execution(Executor executor, String id, ExecutionTask task) {
 			this.executor = executor;
 			this.id = id;
 			this.task = task;
+			this.tCreated = clock.millis();
 		}
 
 		@Override
 		public Result invoke() {
+			long t0 = clock.millis();
+			if (tFirstRun == 0) {
+				tFirstRun = t0;
+			} else if (tStartedWaiting != 0) {
+				tTotalWaiting += t0 - tStartedWaiting;
+				tStartedWaiting = 0;
+			}
+			ExecutionResult result;
 			try {
-				ExecutionResult result = task.call(this);
-				return result;
+				result = task.call(this);
 			} catch (Exception e) {
 				e.printStackTrace();
-				return new ExecutionResult.ErrorResult(new TaskError(e.getMessage()));
+				result = new ExecutionResult.ErrorResult(new TaskError(e.getMessage()));
 			}
+			long t1 = clock.millis();
+			tTotalRunning += t1 - t0;
+			if (result.type() == Type.EXECUTION_CONTINUATION) {
+				tStartedWaiting = t1;
+			} else {
+				System.out.format("lock %s task %s running %dms; waiting %dms; total: %dms%n", executor.lock, id,
+						tTotalRunning, tTotalWaiting, (t1 - tCreated));
+			}
+			return result;
 		}
 
 		@Override
@@ -360,6 +414,12 @@ public class Loxecutor {
 	private Queue<Executable> queue = new LinkedList<>();
 	// flag for signalling shutdown
 	private AtomicBoolean shutdown = new AtomicBoolean(false);
+	// clock
+	private Clock clock = Clock.systemUTC();
+	// global timings
+	private RecentAverage tOverhead = new RecentAverage(16);
+	private RecentAverage tRunning = new RecentAverage(16);
+	private RecentAverage tWaiting = new RecentAverage(16);
 
 	/**
 	 * Make a new {@link Loxecutor}.

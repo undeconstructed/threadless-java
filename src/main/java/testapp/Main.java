@@ -62,11 +62,24 @@ public class Main {
 		SlowThing slow = new SlowThing();
 
 		// directExecutions(t0, lox, slow);
-		withRootActor(t0, lox, slow);
+		// withRootActor(t0, lox, slow);
+		lotsOfTheSame(t0, lox, slow, 100);
 
 		lox.shutdown();
 		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
 		System.exit(0);
+	}
+
+	private static void lotsOfTheSame(long t0, Loxecutor lox, SlowThing slow, int n) throws Exception {
+		for (int i = 0; i < n; i++) {
+			lox.submit("a", ctx -> {
+				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				return ctx.c(() -> {
+					return ctx.v("time " + f.value());
+				});
+			});
+			Thread.sleep(1000);
+		}
 	}
 
 	public static void directExecutions(long t0, Loxecutor lox, SlowThing slow) {
