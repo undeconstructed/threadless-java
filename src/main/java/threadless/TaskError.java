@@ -12,4 +12,9 @@ public class TaskError {
 	public TaskError(String message) {
 		this.message = message;
 	}
+
+	@Override
+	public String toString() {
+		return message;
+	}
 }

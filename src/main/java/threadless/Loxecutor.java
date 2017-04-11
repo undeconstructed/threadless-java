@@ -51,25 +51,28 @@ public class Loxecutor {
 	 */
 	public interface LoxCallback {
 
-		public abstract void call(String key, Object result);
+		public abstract void call(String key, TaskFuture<?> result);
 	}
 
 	/**
 	 * TODO
 	 */
-	interface Executable {
+	private interface Executable {
 
 		public abstract Result invoke();
 
 		public abstract boolean notify(String key, Object object);
 	}
 
+	private static final int HOW_MANY_TIME_SAMPLES = 4;
+	private static final long HOW_LONG_IS_TOO_LONG = 2000;
+
 	/**
 	 * Tracks the average of the last n numbers it was given. Is not accurate at the start.
 	 * 
 	 * @author phil
 	 */
-	static class RecentAverage {
+	private static class RecentAverage {
 
 		private long[] ts;
 		private int n;
@@ -89,12 +92,58 @@ public class Loxecutor {
 		}
 	}
 
-	private static final int HOW_MANY_TIME_SAMPLES = 4;
+	private static TaskFuture<?> errorFuture(TaskError error) {
+		return (TaskFuture<?>) new TaskFuture<Void>() {
+			@Override
+			public boolean isDone() {
+				return true;
+			}
+
+			@Override
+			public boolean isError() {
+				return true;
+			}
+
+			@Override
+			public TaskError error() {
+				return error;
+			}
+
+			@Override
+			public Void value() {
+				return null;
+			}
+		};
+	}
+
+	private static TaskFuture<Object> valueFuture(Object value) {
+		return new TaskFuture<Object>() {
+			@Override
+			public boolean isDone() {
+				return true;
+			}
+
+			@Override
+			public boolean isError() {
+				return false;
+			}
+
+			@Override
+			public TaskError error() {
+				return null;
+			}
+
+			@Override
+			public Object value() {
+				return value;
+			}
+		};
+	}
 
 	/**
 	 * Manages a sequence of Executions waiting on the same lock.
 	 */
-	class Executor {
+	private class Executor {
 
 		// lock this executor is guarding
 		public final String lock;
@@ -104,6 +153,8 @@ public class Loxecutor {
 		private Queue<Execution> queue = new LinkedList<>();
 		// for tracking execution times
 		private RecentAverage timings;
+		// for tracking execution times
+		private long queueMax = 1;
 
 		public Executor(String lock) {
 			super();
@@ -112,11 +163,16 @@ public class Loxecutor {
 		}
 
 		/**
-		 * Adds an {@link Execution}, and returns whether it makes us schedulable.
+		 * Adds an {@link Execution}, or returns an error saying it will not be run.
 		 */
-		public void add(String id, ExecutionTask task) {
+		public TaskError add(String id, ExecutionTask task) {
+			if (queue.size() > queueMax) {
+				return new TaskError("queue full");
+			}
+
 			Execution e = new Execution(this, id, task);
 			queue.add(e);
+			return null;
 		}
 
 		/**
@@ -136,7 +192,8 @@ public class Loxecutor {
 			assert e == active;
 			active = null;
 			long avg = timings.update(clock.millis() - e.tFirstRun);
-			System.out.format("lock %s average %dms%n", lock, avg);
+			queueMax = HOW_LONG_IS_TOO_LONG / avg;
+			System.out.format("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
 		}
 	}
 
@@ -145,7 +202,7 @@ public class Loxecutor {
 	 * for these to be the same thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
-	class Execution implements Executable, ExecutionContext {
+	private class Execution implements Executable, ExecutionContext {
 
 		// which executor is managing this execution
 		private final Executor executor;
@@ -154,9 +211,10 @@ public class Loxecutor {
 		// next task to be run
 		private ExecutionTask task;
 		// keys to wait on, if currently waiting
+		// TODO - need to be able to store errors in here
 		private Map<String, Object> keys;
 		// timings
-		private long tCreated, tFirstScheduled, tFirstRun, tTotalRunning, tStartedWaiting, tTotalWaiting;
+		private long tCreated, tFirstRun, tTotalRunning, tStartedWaiting, tTotalWaiting;
 
 		public Execution(Executor executor, String id, ExecutionTask task) {
 			this.executor = executor;
@@ -186,7 +244,7 @@ public class Loxecutor {
 			if (result.type() == Type.EXECUTION_CONTINUATION) {
 				tStartedWaiting = t1;
 			} else {
-				System.out.format("lock %s task %s running %dms; waiting %dms; total: %dms%n", executor.lock, id,
+				System.out.format("lock: %s; task: %s; running: %dms; waiting: %dms; total: %dms%n", executor.lock, id,
 						tTotalRunning, tTotalWaiting, (t1 - tCreated));
 			}
 			return result;
@@ -223,6 +281,7 @@ public class Loxecutor {
 			return new TaskExternal() {
 				@Override
 				public TaskFuture future() {
+					// TODO - this future should check for errors
 					return new TaskFuture() {
 						@Override
 						public boolean isDone() {
@@ -248,9 +307,7 @@ public class Loxecutor {
 
 				@Override
 				public void notify(Object value) {
-					Loxecutor.this.execute(ctl -> {
-						ctl.notify(key, value);
-					});
+					Loxecutor.this.notify(key, value);
 				}
 			};
 		}
@@ -287,7 +344,7 @@ public class Loxecutor {
 	 * 
 	 * @author phil
 	 */
-	static class Spawn {
+	private static class Spawn {
 
 		public String lock;
 		public ExecutionTask task;
@@ -311,7 +368,7 @@ public class Loxecutor {
 	/**
 	 * Tracks the execution of an actor.
 	 */
-	class Actor implements Executable, ActorContext {
+	private class Actor implements Executable, ActorContext {
 
 		// unique id
 		private final String id;
@@ -417,9 +474,9 @@ public class Loxecutor {
 	// clock
 	private Clock clock = Clock.systemUTC();
 	// global timings
-	private RecentAverage tOverhead = new RecentAverage(16);
-	private RecentAverage tRunning = new RecentAverage(16);
-	private RecentAverage tWaiting = new RecentAverage(16);
+	// private RecentAverage tBeforeRun = new RecentAverage(16);
+	// private RecentAverage tInQueue = new RecentAverage(16);
+	// TODO - more timings
 
 	/**
 	 * Make a new {@link Loxecutor}.
@@ -446,7 +503,7 @@ public class Loxecutor {
 
 					@Override
 					public void notify(String key, Object object) {
-						Loxecutor.this.notify(key, object);
+						Loxecutor.this.notify0(key, object);
 					}
 
 					@Override
@@ -466,15 +523,24 @@ public class Loxecutor {
 	/**
 	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
-	 * @param work
+	 * @param lock
+	 * @param task
+	 * @return
 	 */
 	public <T> Future<String> submit(String lock, ExecutionTask task) {
 		return thread.submit(() -> {
-			thread.execute(this::cycle);
 			return Loxecutor.this.submit0(lock, task);
 		});
 	}
 
+	/**
+	 * Internal submit function, must run in the main thread.
+	 * 
+	 * @param lock
+	 * @param task
+	 * @return
+	 */
+	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private <T> String submit0(String lock, ExecutionTask task) {
 		Executor er = executors.get(lock);
 		if (er == null) {
@@ -485,68 +551,105 @@ public class Loxecutor {
 		n++;
 		String id = Long.toString(n);
 
-		er.add(id, task);
+		TaskError error = er.add(id, task);
+		if (error != null) {
+			invokeCallback(new Pair(id, errorFuture(error)));
+		}
+
 		Execution e = er.getExecutionToSchedule();
 		if (e != null) {
 			queue.add(e);
+			thread.execute(this::cycle);
 		}
 
 		return id;
 	}
 
 	/**
-	 * Submit a task. This is made threadsafe by running in the context of the {@link Loxecutor}.
+	 * Submit an actor. This is made threadsafe by running in the context of the {@link Loxecutor}.
 	 * 
-	 * @param work
+	 * @param id
+	 * @param supplier
+	 * @param input
 	 */
-	public Future<Void> actor(String id, Supplier<ActorTask> supplier, Object input) {
-		return thread.submit(() -> {
-			thread.execute(this::cycle);
+	public void actor(String id, Supplier<ActorTask> supplier, Object input) {
+		thread.submit(() -> {
 			Loxecutor.this.actor0(id, supplier, input);
-			return null;
 		});
 	}
 
-	private <T> String actor0(String id, Supplier<ActorTask> supplier, Object input) {
+	/**
+	 * Internal actor function, must run in the main thread.
+	 * 
+	 * @param id
+	 * @param supplier
+	 * @param input
+	 */
+	private void actor0(String id, Supplier<ActorTask> supplier, Object input) {
 		Actor actor = actors.get(id);
 		if (actor == null) {
+			// need a new actor to process this
 			actor = new Actor(id, supplier);
 			actor.inputs.add(input);
 			actors.put(id, actor);
 			// schedule setup task, which will reschedule with first input
 			queue.add(actor);
+			thread.execute(this::cycle);
 		} else if (actor.sleeper != null) {
+			// if actor was sleeping, then it has no input and is now schedulable
 			Actor a = actor;
 			actor.task = (x) -> a.sleeper.call(input);
 			actor.sleeper = null;
+			queue.add(actor);
+			thread.execute(this::cycle);
 		} else {
+			// if actor has no sleeper, then it is busy and this won't make it schedulable
 			actor.inputs.add(input);
 		}
-
-		return null;
 	}
 
-	private void notify(String key, Object object) {
+	public void notify(String key, Object object) {
+		thread.submit(() -> {
+			notify0(key, object);
+		});
+	}
+
+	/**
+	 * For external work to notify waiters. Must be called in the main thread.
+	 * 
+	 * @param key
+	 * @param object
+	 */
+	private void notify0(String key, Object object) {
 		Executable e = waiters.remove(key);
 		if (e != null) {
 			if (e.notify(key, object)) {
 				queue.add(e);
+				thread.execute(this::cycle);
 			}
 		}
 	}
 
+	/**
+	 * Just runs {@link #cycle0()}, but exits process on exceptions. This is only here because cycle is often called as
+	 * the first lox frame in the executor, so any exceptions from bugs would be lost.
+	 */
 	private void cycle() {
 		try {
 			cycle0();
 		} catch (Exception e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
+			System.exit(1);
 		}
 	}
 
+	/**
+	 * Processes the work queue. Must be called in the main thread.
+	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private void cycle0() {
-		Pair<String, Object> result = null;
+		Pair<String, TaskFuture<?>> result = null;
 
 		Executable e0 = queue.poll();
 		if (e0 == null) {
@@ -560,7 +663,7 @@ public class Loxecutor {
 			Execution e = (Execution) e0;
 			ExecutionResult.ValueResult r = (ExecutionResult.ValueResult) r0;
 			Object v = r.value;
-			result = new Pair(e.id, v);
+			result = new Pair(e.id, valueFuture(v));
 
 			Executor er = e.executor;
 			er.onComplete(e);
@@ -574,7 +677,7 @@ public class Loxecutor {
 			Execution e = (Execution) e0;
 			ExecutionResult.ErrorResult r = (ExecutionResult.ErrorResult) r0;
 			TaskError v = r.error;
-			result = new Pair(e.id, v);
+			result = new Pair(e.id, errorFuture(v));
 
 			Executor er = e.executor;
 			er.onComplete(e);
@@ -654,7 +757,7 @@ public class Loxecutor {
 		// }
 	}
 
-	private void invokeCallback(Pair<String, Object> cbr) {
+	private void invokeCallback(Pair<String, TaskFuture<?>> cbr) {
 		thread.execute(() -> {
 			try {
 				callback.call(cbr.a, cbr.b);
@@ -671,8 +774,8 @@ public class Loxecutor {
 	 * @throws InterruptedException
 	 */
 	public synchronized void shutdown() throws InterruptedException {
-		// XXX - if already no work left this never returns
 		shutdown.set(true);
+		thread.execute(this::cycle);
 		wait();
 	}
 }

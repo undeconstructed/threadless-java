@@ -33,7 +33,7 @@ class SlowThing {
 	}
 
 	public TaskFuture<String> doSlowThingForFuture(ExecutionContext ctx) {
-		int s = r.nextInt(3000);
+		int s = r.nextInt(300);
 		TaskExternal<String> ext = ctx.ext();
 		e.submit(() -> {
 			Thread.sleep(s);
@@ -54,9 +54,15 @@ public class Main {
 	public static void main(String[] args) throws Exception {
 		long t0 = System.currentTimeMillis();
 
-		Loxecutor lox = new Loxecutor((id, result) -> {
+		System.out.format("[%d] start%n", System.currentTimeMillis() - t0);
+
+		Loxecutor lox = new Loxecutor((id, f) -> {
 			long td = System.currentTimeMillis() - t0;
-			System.out.format("[%d] %s: %s%n", td, id, result);
+			if (f.isError()) {
+				System.out.format("[%d] %s: error: %s%n", td, id, f.error());
+				return;
+			}
+			System.out.format("[%d] %s: %s%n", td, id, f.value());
 		});
 
 		SlowThing slow = new SlowThing();
