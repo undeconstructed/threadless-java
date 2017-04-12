@@ -13,6 +13,10 @@ public class TaskError {
 		this.message = message;
 	}
 
+	public TaskError(Throwable error) {
+		this.message = error.getMessage();
+	}
+
 	@Override
 	public String toString() {
 		return message;

@@ -31,7 +31,7 @@ public class Loxecutor {
 
 		public abstract String submit(String lock, ExecutionTask task);
 
-		public abstract void notify(String key, Object object);
+		public abstract void notify(String key, ValueOrError<?> object);
 	}
 
 	/**
@@ -51,7 +51,7 @@ public class Loxecutor {
 	 */
 	public interface LoxCallback {
 
-		public abstract void call(String key, F<?> result);
+		public abstract void call(String key, ValueOrError<?> result);
 	}
 
 	/**
@@ -61,7 +61,7 @@ public class Loxecutor {
 
 		public abstract Result invoke();
 
-		public abstract boolean notify(String key, Object object);
+		public abstract boolean notify(String key, ValueOrError<?> voe);
 	}
 
 	private static final int HOW_MANY_TIME_SAMPLES = 4;
@@ -90,54 +90,6 @@ public class Loxecutor {
 			}
 			return s / ts.length;
 		}
-	}
-
-	private static F<?> errorFuture(TaskError error) {
-		return (F<?>) new F<Void>() {
-			@Override
-			public boolean isDone() {
-				return true;
-			}
-
-			@Override
-			public boolean isError() {
-				return true;
-			}
-
-			@Override
-			public TaskError error() {
-				return error;
-			}
-
-			@Override
-			public Void value() {
-				return null;
-			}
-		};
-	}
-
-	private static F<Object> valueFuture(Object value) {
-		return new F<Object>() {
-			@Override
-			public boolean isDone() {
-				return true;
-			}
-
-			@Override
-			public boolean isError() {
-				return false;
-			}
-
-			@Override
-			public TaskError error() {
-				return null;
-			}
-
-			@Override
-			public Object value() {
-				return value;
-			}
-		};
 	}
 
 	/**
@@ -192,7 +144,7 @@ public class Loxecutor {
 			assert e == active;
 			active = null;
 			long avg = timings.update(clock.millis() - e.tFirstRun);
-			queueMax =  (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
+			queueMax = (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
 			System.out.format("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
 		}
 	}
@@ -247,8 +199,7 @@ public class Loxecutor {
 		// next task to be run
 		private ExecutionTask task;
 		// keys to wait on, if currently waiting
-		// TODO - need to be able to store errors in here
-		private Map<String, Object> keys;
+		private Map<String, ValueOrError<?>> keys;
 		// the spawns created during an execution
 		private List<Spawn> spawns;
 		// timings
@@ -309,8 +260,9 @@ public class Loxecutor {
 			String key = ext0();
 			spawns.add(new Spawn(lock, task, this, key));
 
-			// TODO - this future should check for errors
 			return new F<T>() {
+				ValueOrError<T> voe;
+
 				@Override
 				public boolean isDone() {
 					return true;
@@ -318,17 +270,20 @@ public class Loxecutor {
 
 				@Override
 				public boolean isError() {
-					return false;
+					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
+					return voe.isError();
 				}
 
 				@Override
 				public TaskError error() {
-					return null;
+					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
+					return voe.error;
 				}
 
 				@Override
 				public T value() {
-					return (T) Execution.this.keys.get(key);
+					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
+					return voe.value;
 				}
 			};
 		}
@@ -349,8 +304,9 @@ public class Loxecutor {
 			return new TaskExternal() {
 				@Override
 				public F future() {
-					// TODO - this future should check for errors
 					return new F() {
+						ValueOrError<?> voe;
+
 						@Override
 						public boolean isDone() {
 							return true;
@@ -358,32 +314,35 @@ public class Loxecutor {
 
 						@Override
 						public boolean isError() {
-							return false;
+							voe = voe != null ? voe : Execution.this.keys.get(key);
+							return voe.isError();
 						}
 
 						@Override
 						public TaskError error() {
-							return null;
+							voe = voe != null ? voe : Execution.this.keys.get(key);
+							return voe.error;
 						}
 
 						@Override
 						public Object value() {
-							return Execution.this.keys.get(key);
+							voe = voe != null ? voe : Execution.this.keys.get(key);
+							return voe.value;
 						}
 					};
 				}
 
 				@Override
-				public void notify(Object value) {
-					Loxecutor.this.notify(key, value);
+				public void notify(ValueOrError voe) {
+					Loxecutor.this.notify(key, voe);
 				}
 			};
 		}
 
 		@Override
-		public boolean notify(String key, Object object) {
-			keys.put(key, object);
-			for (Map.Entry<String, Object> k : keys.entrySet()) {
+		public boolean notify(String key, ValueOrError<?> voe) {
+			keys.put(key, voe);
+			for (Map.Entry<String, ?> k : keys.entrySet()) {
 				if (k.getValue() == null) {
 					return false;
 				}
@@ -425,8 +384,7 @@ public class Loxecutor {
 		// queued up inputs
 		private Queue<Object> inputs = new LinkedList<>();
 		// keys to wait on, if currently waiting
-		// TODO - need to be able to store errors in here
-		private Map<String, Object> keys;
+		private Map<String, ValueOrError<?>> keys;
 
 		public Actor(String id, Supplier<ActorTask> supplier) {
 			this.id = id;
@@ -473,10 +431,10 @@ public class Loxecutor {
 		}
 
 		@Override
-		public boolean notify(String key, Object object) {
+		public boolean notify(String key, ValueOrError<?> voe) {
 			// TODO - this needs to check if actor is waiting or not
-			keys.put(key, object);
-			for (Map.Entry<String, Object> k : keys.entrySet()) {
+			keys.put(key, voe);
+			for (Map.Entry<String, ?> k : keys.entrySet()) {
 				if (k.getValue() == null) {
 					return false;
 				}
@@ -547,8 +505,8 @@ public class Loxecutor {
 					}
 
 					@Override
-					public void notify(String key, Object object) {
-						Loxecutor.this.notify0(key, object);
+					public void notify(String key, ValueOrError<?> voe) {
+						Loxecutor.this.notify0(key, voe);
 					}
 
 					@Override
@@ -602,7 +560,7 @@ public class Loxecutor {
 
 		TaskError error = er.add(id, task, parent, key);
 		if (error != null) {
-			invokeCallback(new Pair(id, errorFuture(error)));
+			invokeCallback(new Pair(id, ValueOrError.error(error)));
 		}
 
 		Execution e = er.getExecutionToSchedule();
@@ -657,9 +615,9 @@ public class Loxecutor {
 		}
 	}
 
-	public void notify(String key, Object object) {
+	public void notify(String key, ValueOrError<?> voe) {
 		thread.submit(() -> {
-			notify0(key, object);
+			notify0(key, voe);
 		});
 	}
 
@@ -669,10 +627,10 @@ public class Loxecutor {
 	 * @param key
 	 * @param object
 	 */
-	private void notify0(String key, Object object) {
+	private void notify0(String key, ValueOrError<?> voe) {
 		Executable e = waiters.remove(key);
 		if (e != null) {
-			if (e.notify(key, object)) {
+			if (e.notify(key, voe)) {
 				queue.add(e);
 				thread.execute(this::cycle);
 			}
@@ -698,7 +656,7 @@ public class Loxecutor {
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private void cycle0() {
-		Pair<String, F<?>> result = null;
+		Pair<String, ValueOrError<?>> result = null;
 
 		Executable e0 = queue.poll();
 		if (e0 == null) {
@@ -712,7 +670,7 @@ public class Loxecutor {
 			Execution e = (Execution) e0;
 			ExecutionResult.ValueResult r = (ExecutionResult.ValueResult) r0;
 			Object v = r.value;
-			result = new Pair(e.id, valueFuture(v));
+			result = new Pair(e.id, ValueOrError.value(v));
 
 			Executor er = e.executor;
 			er.onComplete(e);
@@ -722,7 +680,7 @@ public class Loxecutor {
 			}
 
 			if (e.parent != null) {
-				if (e.parent.notify(e.key, v)) {
+				if (e.parent.notify(e.key, ValueOrError.value(v))) {
 					queue.add(e.parent);
 				}
 			}
@@ -733,7 +691,7 @@ public class Loxecutor {
 			Execution e = (Execution) e0;
 			ExecutionResult.ErrorResult r = (ExecutionResult.ErrorResult) r0;
 			TaskError v = r.error;
-			result = new Pair(e.id, errorFuture(v));
+			result = new Pair(e.id, ValueOrError.error(v));
 
 			Executor er = e.executor;
 			er.onComplete(e);
@@ -743,7 +701,7 @@ public class Loxecutor {
 			}
 
 			if (e.parent != null) {
-				if (e.parent.notify(e.key, v)) {
+				if (e.parent.notify(e.key, ValueOrError.error(v))) {
 					queue.add(e.parent);
 				}
 			}
@@ -846,7 +804,7 @@ public class Loxecutor {
 		// }
 	}
 
-	private void invokeCallback(Pair<String, F<?>> cbr) {
+	private void invokeCallback(Pair<String, ValueOrError<?>> cbr) {
 		thread.execute(() -> {
 			try {
 				callback.call(cbr.a, cbr.b);

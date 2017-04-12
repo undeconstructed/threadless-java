@@ -10,8 +10,10 @@ import threadless.ActorResult;
 import threadless.ActorSleeper;
 import threadless.ActorTask;
 import threadless.ExecutionContext;
+import threadless.ExecutionTask;
 import threadless.Loxecutor;
 import threadless.TaskExternal;
+import threadless.ValueOrError;
 import threadless.F;
 
 /**
@@ -25,9 +27,10 @@ class SlowThing {
 	Random r = new Random();
 
 	public void doSlowThingFromExt(TaskExternal<String> ext) {
+		int s = r.nextInt(300);
 		e.submit(() -> {
-			Thread.sleep(3000);
-			ext.notify("result");
+			Thread.sleep(s);
+			ext.notify(ValueOrError.value(String.valueOf(s)));
 			return true;
 		});
 	}
@@ -37,7 +40,8 @@ class SlowThing {
 		TaskExternal<String> ext = ctx.ext();
 		e.submit(() -> {
 			Thread.sleep(s);
-			ext.notify(String.valueOf(s));
+			ext.notify(ValueOrError.value(String.valueOf(s)));
+			// ext.notify(ValueOrError.error(new RuntimeException("oh dear")));
 			return true;
 		});
 		return ext.future();
@@ -56,13 +60,13 @@ public class Main {
 
 		System.out.format("[%d] start%n", System.currentTimeMillis() - t0);
 
-		Loxecutor lox = new Loxecutor((id, f) -> {
+		Loxecutor lox = new Loxecutor((id, v) -> {
 			long td = System.currentTimeMillis() - t0;
-			if (f.isError()) {
-				System.out.format("[%d] %s: error: %s%n", td, id, f.error());
+			if (v.isError()) {
+				System.out.format("[%d] id: %s; error: %s%n", td, id, v.error());
 				return;
 			}
-			System.out.format("[%d] %s: %s%n", td, id, f.value());
+			System.out.format("[%d] id: %s; value: %s%n", td, id, v.value());
 		});
 
 		SlowThing slow = new SlowThing();
@@ -70,25 +74,38 @@ public class Main {
 		// directExecutions(t0, lox, slow);
 		// withRootActor(t0, lox, slow);
 		// lotsOfTheSame(t0, lox, slow, 100);
-		withPrereq(t0, lox);
+		withPrereq(t0, lox, slow);
 
 		lox.shutdown();
 		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
 		System.exit(0);
 	}
 
-	private static void withPrereq(long t0, Loxecutor lox) {
-		lox.submit("a", ctx -> {
-			F<String> f = ctx.submit("loader", c -> {
-				return ctx.v("ok");
-			});
+	public static void withPrereq(long t0, Loxecutor lox, SlowThing slow) {
+		ExecutionTask loader = ctx -> {
+			F<String> fs = slow.doSlowThingForFuture(ctx);
 			return ctx.c(() -> {
+				if (fs.isError()) {
+					return ctx.e(fs.error());
+				}
+				return ctx.v("time " + fs.value());
+			});
+		};
+
+		ExecutionTask task = ctx -> {
+			F<String> f = ctx.submit("loader", loader);
+			return ctx.c(() -> {
+				if (f.isError()) {
+					return ctx.v("load error: " + f.error());
+				}
 				return ctx.v("loaded? " + f.value());
 			});
-		});
+		};
+
+		lox.submit("a", task);
 	}
 
-	private static void lotsOfTheSame(long t0, Loxecutor lox, SlowThing slow, int n) throws Exception {
+	public static void lotsOfTheSame(long t0, Loxecutor lox, SlowThing slow, int n) throws Exception {
 		for (int i = 0; i < n; i++) {
 			lox.submit("a", ctx -> {
 				F<String> f = slow.doSlowThingForFuture(ctx);

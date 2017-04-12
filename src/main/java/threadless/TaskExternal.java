@@ -7,7 +7,7 @@ package threadless;
  */
 public interface TaskExternal<T> {
 
-	public void notify(T result);
+	public void notify(ValueOrError<T> voe);
 
 	public F<T> future();
 }
