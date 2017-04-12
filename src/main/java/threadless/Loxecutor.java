@@ -51,7 +51,7 @@ public class Loxecutor {
 	 */
 	public interface LoxCallback {
 
-		public abstract void call(String key, TaskFuture<?> result);
+		public abstract void call(String key, F<?> result);
 	}
 
 	/**
@@ -92,8 +92,8 @@ public class Loxecutor {
 		}
 	}
 
-	private static TaskFuture<?> errorFuture(TaskError error) {
-		return (TaskFuture<?>) new TaskFuture<Void>() {
+	private static F<?> errorFuture(TaskError error) {
+		return (F<?>) new F<Void>() {
 			@Override
 			public boolean isDone() {
 				return true;
@@ -116,8 +116,8 @@ public class Loxecutor {
 		};
 	}
 
-	private static TaskFuture<Object> valueFuture(Object value) {
-		return new TaskFuture<Object>() {
+	private static F<Object> valueFuture(Object value) {
+		return new F<Object>() {
 			@Override
 			public boolean isDone() {
 				return true;
@@ -165,12 +165,12 @@ public class Loxecutor {
 		/**
 		 * Adds an {@link Execution}, or returns an error saying it will not be run.
 		 */
-		public TaskError add(String id, ExecutionTask task) {
+		public TaskError add(String id, ExecutionTask task, Executable parent, String key) {
 			if (queue.size() > queueMax) {
 				return new TaskError("queue full");
 			}
 
-			Execution e = new Execution(this, id, task);
+			Execution e = new Execution(this, id, task, parent, key);
 			queue.add(e);
 			return null;
 		}
@@ -192,8 +192,40 @@ public class Loxecutor {
 			assert e == active;
 			active = null;
 			long avg = timings.update(clock.millis() - e.tFirstRun);
-			queueMax = HOW_LONG_IS_TOO_LONG / avg;
+			queueMax =  (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
 			System.out.format("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
+		}
+	}
+
+	/**
+	 * For tracking what should be spawned as the result of an invocation.
+	 * 
+	 * @author phil
+	 */
+	private static class Spawn {
+
+		// for executions
+		String lock;
+		ExecutionTask task;
+		Executable parent;
+		String key;
+
+		// for actors
+		String id;
+		Supplier<ActorTask> supplier;
+		Object input;
+
+		public Spawn(String lock, ExecutionTask task, Executable parent, String key) {
+			this.lock = lock;
+			this.task = task;
+			this.parent = parent;
+			this.key = key;
+		}
+
+		public Spawn(String id, Supplier<ActorTask> supplier, Object input) {
+			this.id = id;
+			this.supplier = supplier;
+			this.input = input;
 		}
 	}
 
@@ -208,18 +240,26 @@ public class Loxecutor {
 		private final Executor executor;
 		// unique id of this execution
 		private final String id;
+		// parent to be notified on completion
+		private final Executable parent;
+		// key on which to notify parent
+		private final String key;
 		// next task to be run
 		private ExecutionTask task;
 		// keys to wait on, if currently waiting
 		// TODO - need to be able to store errors in here
 		private Map<String, Object> keys;
+		// the spawns created during an execution
+		private List<Spawn> spawns;
 		// timings
 		private long tCreated, tFirstRun, tTotalRunning, tStartedWaiting, tTotalWaiting;
 
-		public Execution(Executor executor, String id, ExecutionTask task) {
+		public Execution(Executor executor, String id, ExecutionTask task, Executable parent, String key) {
 			this.executor = executor;
 			this.id = id;
 			this.task = task;
+			this.parent = parent;
+			this.key = key;
 			this.tCreated = clock.millis();
 		}
 
@@ -261,8 +301,36 @@ public class Loxecutor {
 		}
 
 		@Override
-		public <T> TaskFuture<T> submit(String lock, ExecutionTask task) {
-			throw new RuntimeException("not implemented");
+		public <T> F<T> submit(String lock, ExecutionTask task) {
+			if (spawns == null) {
+				spawns = new LinkedList<>();
+			}
+
+			String key = ext0();
+			spawns.add(new Spawn(lock, task, this, key));
+
+			// TODO - this future should check for errors
+			return new F<T>() {
+				@Override
+				public boolean isDone() {
+					return true;
+				}
+
+				@Override
+				public boolean isError() {
+					return false;
+				}
+
+				@Override
+				public TaskError error() {
+					return null;
+				}
+
+				@Override
+				public T value() {
+					return (T) Execution.this.keys.get(key);
+				}
+			};
 		}
 
 		private String ext0() {
@@ -280,9 +348,9 @@ public class Loxecutor {
 			String key = ext0();
 			return new TaskExternal() {
 				@Override
-				public TaskFuture future() {
+				public F future() {
 					// TODO - this future should check for errors
-					return new TaskFuture() {
+					return new F() {
 						@Override
 						public boolean isDone() {
 							return true;
@@ -340,32 +408,6 @@ public class Loxecutor {
 	}
 
 	/**
-	 * For tracking what should be spawned as the result of an invocation.
-	 * 
-	 * @author phil
-	 */
-	private static class Spawn {
-
-		public String lock;
-		public ExecutionTask task;
-
-		public String id;
-		public Supplier<ActorTask> supplier;
-		public Object input;
-
-		public Spawn(String lock, ExecutionTask task) {
-			this.lock = lock;
-			this.task = task;
-		}
-
-		public Spawn(String id, Supplier<ActorTask> supplier, Object input) {
-			this.id = id;
-			this.supplier = supplier;
-			this.input = input;
-		}
-	}
-
-	/**
 	 * Tracks the execution of an actor.
 	 */
 	private class Actor implements Executable, ActorContext {
@@ -379,10 +421,11 @@ public class Loxecutor {
 		// the current actor sleeper, if this actor is sleeping
 		private ActorSleeper sleeper;
 		// the spawns created during an execution
-		public List<Spawn> spawns;
+		private List<Spawn> spawns;
 		// queued up inputs
-		public Queue<Object> inputs = new LinkedList<>();
-
+		private Queue<Object> inputs = new LinkedList<>();
+		// keys to wait on, if currently waiting
+		// TODO - need to be able to store errors in here
 		private Map<String, Object> keys;
 
 		public Actor(String id, Supplier<ActorTask> supplier) {
@@ -419,17 +462,19 @@ public class Loxecutor {
 		}
 
 		@Override
-		public <T> TaskFuture<T> submit(String lock, ExecutionTask task) {
+		public <T> F<T> submit(String lock, ExecutionTask task) {
 			if (spawns == null) {
 				spawns = new LinkedList<>();
 			}
-			spawns.add(new Spawn(lock, task));
+			// TODO - need to connect up notifications
+			spawns.add(new Spawn(lock, task, null, null));
 			// TODO - link up a future here
 			return null;
 		}
 
 		@Override
 		public boolean notify(String key, Object object) {
+			// TODO - this needs to check if actor is waiting or not
 			keys.put(key, object);
 			for (Map.Entry<String, Object> k : keys.entrySet()) {
 				if (k.getValue() == null) {
@@ -508,7 +553,7 @@ public class Loxecutor {
 
 					@Override
 					public String submit(String lock, ExecutionTask task) {
-						return Loxecutor.this.submit0(lock, task);
+						return Loxecutor.this.submit0(lock, task, null, null);
 					}
 				});
 			} catch (Exception e) {
@@ -529,7 +574,7 @@ public class Loxecutor {
 	 */
 	public <T> Future<String> submit(String lock, ExecutionTask task) {
 		return thread.submit(() -> {
-			return Loxecutor.this.submit0(lock, task);
+			return Loxecutor.this.submit0(lock, task, null, null);
 		});
 	}
 
@@ -538,10 +583,14 @@ public class Loxecutor {
 	 * 
 	 * @param lock
 	 * @param task
+	 * @param parent
+	 *            to be notified on completion
+	 * @param key
+	 *            for notification
 	 * @return
 	 */
 	@SuppressWarnings({ "rawtypes", "unchecked" })
-	private <T> String submit0(String lock, ExecutionTask task) {
+	private <T> String submit0(String lock, ExecutionTask task, Executable parent, String key) {
 		Executor er = executors.get(lock);
 		if (er == null) {
 			er = new Executor(lock);
@@ -551,7 +600,7 @@ public class Loxecutor {
 		n++;
 		String id = Long.toString(n);
 
-		TaskError error = er.add(id, task);
+		TaskError error = er.add(id, task, parent, key);
 		if (error != null) {
 			invokeCallback(new Pair(id, errorFuture(error)));
 		}
@@ -649,7 +698,7 @@ public class Loxecutor {
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private void cycle0() {
-		Pair<String, TaskFuture<?>> result = null;
+		Pair<String, F<?>> result = null;
 
 		Executable e0 = queue.poll();
 		if (e0 == null) {
@@ -671,6 +720,13 @@ public class Loxecutor {
 			if (en != null) {
 				queue.add(en);
 			}
+
+			if (e.parent != null) {
+				if (e.parent.notify(e.key, v)) {
+					queue.add(e.parent);
+				}
+			}
+
 			break;
 		}
 		case EXECUTION_ERROR: {
@@ -685,15 +741,35 @@ public class Loxecutor {
 			if (en != null) {
 				queue.add(e);
 			}
+
+			if (e.parent != null) {
+				if (e.parent.notify(e.key, v)) {
+					queue.add(e.parent);
+				}
+			}
+
 			break;
 		}
 		case EXECUTION_CONTINUATION: {
 			Execution e = (Execution) e0;
 			ExecutionResult.ContinuationResult r = (ExecutionResult.ContinuationResult) r0;
 			e.task = (x) -> r.task.call();
+
+			if (e.spawns != null) {
+				for (Spawn spawn : e.spawns) {
+					if (spawn.lock != null) {
+						submit0(spawn.lock, spawn.task, spawn.parent, spawn.key);
+					} else if (spawn.id == null) {
+						actor0(spawn.id, spawn.supplier, spawn.input);
+					}
+				}
+				e.spawns = null;
+			}
+
 			for (String key : e.keys.keySet()) {
 				waiters.put(key, e);
 			}
+
 			break;
 		}
 		case ACTOR_SLEEP: {
@@ -703,7 +779,7 @@ public class Loxecutor {
 			if (a.spawns != null) {
 				for (Spawn spawn : a.spawns) {
 					if (spawn.lock != null) {
-						submit0(spawn.lock, spawn.task);
+						submit0(spawn.lock, spawn.task, spawn.parent, spawn.key);
 					} else if (spawn.id == null) {
 						actor0(spawn.id, spawn.supplier, spawn.input);
 					}
@@ -725,7 +801,7 @@ public class Loxecutor {
 			Actor a = (Actor) e0;
 			ActorResult.ErrorResult r = (ActorResult.ErrorResult) r0;
 			// TODO hmm
-			System.out.println("cannot handle actor errors");
+			System.out.format("actor: %s; error: %s%n", a.id, r.error);
 			System.exit(1);
 			break;
 		}
@@ -733,9 +809,22 @@ public class Loxecutor {
 			Actor a = (Actor) e0;
 			ActorResult.ContinuationResult r = (ActorResult.ContinuationResult) r0;
 			a.task = (x) -> r.task.call();
+
+			if (a.spawns != null) {
+				for (Spawn spawn : a.spawns) {
+					if (spawn.lock != null) {
+						submit0(spawn.lock, spawn.task, spawn.parent, spawn.key);
+					} else if (spawn.id == null) {
+						actor0(spawn.id, spawn.supplier, spawn.input);
+					}
+				}
+				a.spawns = null;
+			}
+
 			for (String key : a.keys.keySet()) {
 				waiters.put(key, a);
 			}
+
 			break;
 		}
 		}
@@ -757,7 +846,7 @@ public class Loxecutor {
 		// }
 	}
 
-	private void invokeCallback(Pair<String, TaskFuture<?>> cbr) {
+	private void invokeCallback(Pair<String, F<?>> cbr) {
 		thread.execute(() -> {
 			try {
 				callback.call(cbr.a, cbr.b);

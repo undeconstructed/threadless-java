@@ -12,7 +12,7 @@ import threadless.ActorTask;
 import threadless.ExecutionContext;
 import threadless.Loxecutor;
 import threadless.TaskExternal;
-import threadless.TaskFuture;
+import threadless.F;
 
 /**
  * A sort of service that takes a long time to do whatever it does.
@@ -32,7 +32,7 @@ class SlowThing {
 		});
 	}
 
-	public TaskFuture<String> doSlowThingForFuture(ExecutionContext ctx) {
+	public F<String> doSlowThingForFuture(ExecutionContext ctx) {
 		int s = r.nextInt(300);
 		TaskExternal<String> ext = ctx.ext();
 		e.submit(() -> {
@@ -69,17 +69,29 @@ public class Main {
 
 		// directExecutions(t0, lox, slow);
 		// withRootActor(t0, lox, slow);
-		lotsOfTheSame(t0, lox, slow, 100);
+		// lotsOfTheSame(t0, lox, slow, 100);
+		withPrereq(t0, lox);
 
 		lox.shutdown();
 		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
 		System.exit(0);
 	}
 
+	private static void withPrereq(long t0, Loxecutor lox) {
+		lox.submit("a", ctx -> {
+			F<String> f = ctx.submit("loader", c -> {
+				return ctx.v("ok");
+			});
+			return ctx.c(() -> {
+				return ctx.v("loaded? " + f.value());
+			});
+		});
+	}
+
 	private static void lotsOfTheSame(long t0, Loxecutor lox, SlowThing slow, int n) throws Exception {
 		for (int i = 0; i < n; i++) {
 			lox.submit("a", ctx -> {
-				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
 					return ctx.v("time " + f.value());
 				});
@@ -94,7 +106,7 @@ public class Main {
 				// TaskExternal<String> ext = ctx.ext();
 				// slow.doSlowThingFromExt(ext);
 				// return ctx.c(() -> ctx.v("do"));
-				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
 					if (f.isError()) {
 						return ctx.v("do error");
@@ -106,7 +118,7 @@ public class Main {
 				return ctx.v("re 0");
 			});
 			ctl.submit("a", ctx -> {
-				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
 					if (f.isError()) {
 						return ctx.v("me error");
@@ -115,7 +127,7 @@ public class Main {
 				});
 			});
 			ctl.submit("b", ctx -> {
-				TaskFuture<String> f = slow.doSlowThingForFuture(ctx);
+				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
 					if (f.isError()) {
 						return ctx.v("fa error");
@@ -149,7 +161,7 @@ public class Main {
 				String lock = (Integer) i % 2 == 0 ? "even" : "odd";
 				ctx.submit(lock, c -> {
 					System.out.println("doing a " + lock + " task: " + i);
-					TaskFuture<String> f = slow.doSlowThingForFuture(c);
+					F<String> f = slow.doSlowThingForFuture(c);
 					return c.c(() -> {
 						if (f.isError()) {
 							return c.v(lock + " error");
@@ -184,7 +196,7 @@ public class Main {
 			String lock = (Integer) i % 2 == 0 ? "even" : "odd";
 			ctx.submit(lock, c -> {
 				System.out.println("doing a " + lock + " task: " + i);
-				TaskFuture<String> f = slow.doSlowThingForFuture(c);
+				F<String> f = slow.doSlowThingForFuture(c);
 				return c.c(() -> {
 					if (f.isError()) {
 						return c.v(lock + " error");

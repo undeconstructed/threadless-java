@@ -4,7 +4,7 @@ package threadless;
  * A variation of a future. When these are created they will always be empty - they are only ever supposed to be read
  * inside continuations.
  */
-public interface TaskFuture<T> {
+public interface F<T> {
 
 	/**
 	 * In the context of an actor, it is possible that futures will not be done when the actor is awoken, in the context

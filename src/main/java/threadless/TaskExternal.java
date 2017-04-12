@@ -9,5 +9,5 @@ public interface TaskExternal<T> {
 
 	public void notify(T result);
 
-	public TaskFuture<T> future();
+	public F<T> future();
 }

@@ -23,5 +23,5 @@ public interface Context {
 	 * @param lock
 	 * @param task
 	 */
-	public abstract <T> TaskFuture<T> submit(String lock, ExecutionTask task);
+	public abstract <T> F<T> submit(String lock, ExecutionTask task);
 }
