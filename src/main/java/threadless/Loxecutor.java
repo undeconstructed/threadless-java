@@ -260,32 +260,7 @@ public class Loxecutor {
 			String key = ext0();
 			spawns.add(new Spawn(lock, task, this, key));
 
-			return new F<T>() {
-				ValueOrError<T> voe;
-
-				@Override
-				public boolean isDone() {
-					return true;
-				}
-
-				@Override
-				public boolean isError() {
-					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
-					return voe.isError();
-				}
-
-				@Override
-				public TaskError error() {
-					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
-					return voe.error;
-				}
-
-				@Override
-				public T value() {
-					voe = voe != null ? voe : (ValueOrError<T>) Execution.this.keys.get(key);
-					return voe.value;
-				}
-			};
+			return futureFromKey(key);
 		}
 
 		private String ext0() {
@@ -304,37 +279,41 @@ public class Loxecutor {
 			return new TaskExternal() {
 				@Override
 				public F future() {
-					return new F() {
-						ValueOrError<?> voe;
-
-						@Override
-						public boolean isDone() {
-							return true;
-						}
-
-						@Override
-						public boolean isError() {
-							voe = voe != null ? voe : Execution.this.keys.get(key);
-							return voe.isError();
-						}
-
-						@Override
-						public TaskError error() {
-							voe = voe != null ? voe : Execution.this.keys.get(key);
-							return voe.error;
-						}
-
-						@Override
-						public Object value() {
-							voe = voe != null ? voe : Execution.this.keys.get(key);
-							return voe.value;
-						}
-					};
+					return futureFromKey(key);
 				}
 
 				@Override
 				public void notify(ValueOrError voe) {
 					Loxecutor.this.notify(key, voe);
+				}
+			};
+		}
+
+		private F futureFromKey(String key) {
+			return new F() {
+				ValueOrError<?> voe;
+
+				@Override
+				public boolean isDone() {
+					return true;
+				}
+
+				@Override
+				public boolean isError() {
+					voe = voe != null ? voe : Execution.this.keys.get(key);
+					return voe.isError();
+				}
+
+				@Override
+				public TaskError error() {
+					voe = voe != null ? voe : Execution.this.keys.get(key);
+					return voe.error;
+				}
+
+				@Override
+				public Object value() {
+					voe = voe != null ? voe : Execution.this.keys.get(key);
+					return voe.value;
 				}
 			};
 		}
