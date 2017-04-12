@@ -3,6 +3,7 @@ package testapp;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import threadless.ActorContext;
@@ -11,10 +12,10 @@ import threadless.ActorSleeper;
 import threadless.ActorTask;
 import threadless.ExecutionContext;
 import threadless.ExecutionTask;
+import threadless.F;
 import threadless.Loxecutor;
 import threadless.TaskExternal;
 import threadless.ValueOrError;
-import threadless.F;
 
 /**
  * A sort of service that takes a long time to do whatever it does.
@@ -55,20 +56,12 @@ class SlowThing {
  */
 public class Main {
 
-	public static void main(String[] args) throws Exception {
-		long t0 = System.currentTimeMillis();
+	public static long t0 = System.currentTimeMillis();
 
+	public static void main(String[] args) throws Exception {
 		System.out.format("[%d] start%n", System.currentTimeMillis() - t0);
 
-		Loxecutor lox = new Loxecutor((id, v) -> {
-			long td = System.currentTimeMillis() - t0;
-			if (v.isError()) {
-				System.out.format("[%d] id: %s; error: %s%n", td, id, v.error());
-				return;
-			}
-			System.out.format("[%d] id: %s; value: %s%n", td, id, v.value());
-		});
-
+		Loxecutor lox = new Loxecutor();
 		SlowThing slow = new SlowThing();
 
 		// directExecutions(t0, lox, slow);
@@ -79,6 +72,17 @@ public class Main {
 		lox.shutdown();
 		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
 		System.exit(0);
+	}
+
+	public static Consumer<ValueOrError<?>> printCallback(String id) {
+		return voe -> {
+			long td = System.currentTimeMillis() - t0;
+			if (voe.isError()) {
+				System.out.format("[%d] id: %s; error: %s%n", td, id, voe.error());
+				return;
+			}
+			System.out.format("[%d] id: %s; value: %s%n", td, id, voe.value());
+		};
 	}
 
 	public static void withPrereq(long t0, Loxecutor lox, SlowThing slow) {
@@ -102,7 +106,7 @@ public class Main {
 			});
 		};
 
-		lox.submit("a", task);
+		lox.submit("a", task, printCallback("a"));
 	}
 
 	public static void lotsOfTheSame(long t0, Loxecutor lox, SlowThing slow, int n) throws Exception {
@@ -112,7 +116,7 @@ public class Main {
 				return ctx.c(() -> {
 					return ctx.v("time " + f.value());
 				});
-			});
+			}, printCallback("t" + i));
 			Thread.sleep(1000);
 		}
 	}
@@ -130,10 +134,10 @@ public class Main {
 					}
 					return ctx.v("do " + f.value());
 				});
-			});
+			}, printCallback("do"));
 			ctl.submit("a", ctx -> {
 				return ctx.v("re 0");
-			});
+			}, printCallback("re"));
 			ctl.submit("a", ctx -> {
 				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
@@ -142,7 +146,7 @@ public class Main {
 					}
 					return ctx.v("me " + f.value());
 				});
-			});
+			}, printCallback("me"));
 			ctl.submit("b", ctx -> {
 				F<String> f = slow.doSlowThingForFuture(ctx);
 				return ctx.c(() -> {
@@ -151,7 +155,7 @@ public class Main {
 					}
 					return ctx.v("fa " + f.value());
 				});
-			});
+			}, printCallback("fa"));
 			System.out.format("[%d] start%n", System.currentTimeMillis() - t0);
 		});
 	}
