@@ -160,24 +160,12 @@ public class Main {
 		});
 	}
 
-	public static interface TailRecursable {
-
-		void call(Object i);
-	}
-
-	public static ActorSleeper tail(ActorContext ctx, TailRecursable r) {
-		return i -> {
-			r.call(i);
-			return ctx.s(tail(ctx, r));
-		};
-	}
-
 	public static void withRootActor(long t0, Loxecutor lox, SlowThing slow) {
 		Supplier<ActorTask> roots = () -> (ctx) -> {
 			System.out.println("new root");
 			// return ctx.e(new TaskError("actor error"));
 			// return ctx.s(new RootLoop(ctx, slow));
-			return ctx.s(tail(ctx, i -> {
+			return ctx.ss(i -> {
 				System.out.println("spawning a task: " + i);
 				String lock = (Integer) i % 2 == 0 ? "even" : "odd";
 				ctx.submit(lock, c -> {
@@ -190,7 +178,8 @@ public class Main {
 						return c.v(lock + " " + f.value());
 					});
 				});
-			}));
+				return null;
+			});
 		};
 
 		lox.execute(ctl -> {

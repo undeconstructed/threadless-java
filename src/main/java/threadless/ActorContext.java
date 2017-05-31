@@ -23,6 +23,14 @@ public interface ActorContext extends Context {
 	public abstract ActorResult s(ActorSleeper task);
 
 	/**
+	 * Get a sleep result to return. This implies the actor is ready for more input.
+	 * 
+	 * @param task
+	 * @return
+	 */
+	public abstract ActorResult ss(ActorSleeper task);
+
+	/**
 	 * Get an error result to return.
 	 * 
 	 * @param error

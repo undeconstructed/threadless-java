@@ -449,6 +449,19 @@ public class Loxecutor {
 			return new ActorResult.SleepResult(task);
 		}
 
+		private ActorSleeper tail(ActorSleeper task) {
+			return i -> {
+				task.call(i);
+				// TODO - check result and maybe escape
+				return s(tail(task));
+			};
+		}
+
+		@Override
+		public ActorResult ss(ActorSleeper task) {
+			return new ActorResult.SleepResult(tail(task));
+		}
+
 		@Override
 		public ActorResult e(TaskError error) {
 			return new ActorResult.ErrorResult(error);
