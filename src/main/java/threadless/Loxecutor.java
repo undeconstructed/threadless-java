@@ -29,7 +29,7 @@ public class Loxecutor {
 
 		public abstract void actor(String lock, Supplier<ActorTask> task, Object input);
 
-		public abstract void submit(String lock, ExecutionTask task, Consumer<ValueOrError<?>> callback);
+		public abstract void submit(String lock, TaskEntry task, Consumer<ValueOrError<?>> callback);
 
 		public abstract void notify(String key, ValueOrError<?> object);
 	}
@@ -107,7 +107,7 @@ public class Loxecutor {
 		/**
 		 * Adds an {@link Execution}, or returns an error saying it will not be run.
 		 */
-		public TaskError add(String id, ExecutionTask task, Executable parent, String key) {
+		public TaskError add(String id, TaskEntry task, Executable parent, String key) {
 			if (queue.size() > queueMax) {
 				return new TaskError("queue full");
 			}
@@ -117,7 +117,7 @@ public class Loxecutor {
 			return null;
 		}
 
-		public TaskError add(String id, ExecutionTask task, Consumer<ValueOrError<?>> callback) {
+		public TaskError add(String id, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 			if (queue.size() > queueMax) {
 				return new TaskError("queue full");
 			}
@@ -158,7 +158,7 @@ public class Loxecutor {
 
 		// for executions
 		String lock;
-		ExecutionTask task;
+		TaskEntry task;
 		Executable parent;
 		String key;
 
@@ -167,7 +167,7 @@ public class Loxecutor {
 		Supplier<ActorTask> supplier;
 		Object input;
 
-		public Spawn(String lock, ExecutionTask task, Executable parent, String key) {
+		public Spawn(String lock, TaskEntry task, Executable parent, String key) {
 			this.lock = lock;
 			this.task = task;
 			this.parent = parent;
@@ -186,7 +186,7 @@ public class Loxecutor {
 	 * for these to be the same thing.
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private class Execution implements Executable, ExecutionContext {
+	private class Execution implements Executable, TaskContext {
 
 		// which executor is managing this execution
 		private final Executor executor;
@@ -199,7 +199,7 @@ public class Loxecutor {
 		// key on which to notify parent
 		private final Consumer<ValueOrError<?>> callback;
 		// next task to be run
-		private ExecutionTask task;
+		private TaskEntry task;
 		// keys to wait on, if currently waiting
 		private Map<String, ValueOrError<?>> keys;
 		// the spawns created during an execution
@@ -207,7 +207,7 @@ public class Loxecutor {
 		// timings
 		private long tCreated, tFirstRun, tTotalRunning, tStartedWaiting, tTotalWaiting;
 
-		public Execution(Executor executor, String id, ExecutionTask task, Executable parent, String key) {
+		public Execution(Executor executor, String id, TaskEntry task, Executable parent, String key) {
 			this.executor = executor;
 			this.id = id;
 			this.task = task;
@@ -217,7 +217,7 @@ public class Loxecutor {
 			this.tCreated = clock.millis();
 		}
 
-		public Execution(Executor executor, String id, ExecutionTask task, Consumer<ValueOrError<?>> callback) {
+		public Execution(Executor executor, String id, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 			this.executor = executor;
 			this.id = id;
 			this.task = task;
@@ -236,12 +236,12 @@ public class Loxecutor {
 				tTotalWaiting += t0 - tStartedWaiting;
 				tStartedWaiting = 0;
 			}
-			ExecutionResult result;
+			TaskResult result;
 			try {
 				result = task.call(this);
 			} catch (Exception e) {
 				e.printStackTrace();
-				result = new ExecutionResult.ErrorResult(new TaskError(e.getMessage()));
+				result = new TaskResult.ErrorResult(new TaskError(e.getMessage()));
 			}
 			long t1 = clock.millis();
 			tTotalRunning += t1 - t0;
@@ -265,7 +265,7 @@ public class Loxecutor {
 		}
 
 		@Override
-		public <T> F<T> submit(String lock, ExecutionTask task) {
+		public <T> F<T> submit(String lock, TaskEntry task) {
 			if (spawns == null) {
 				spawns = new LinkedList<>();
 			}
@@ -343,18 +343,18 @@ public class Loxecutor {
 		}
 
 		@Override
-		public ExecutionResult v(Object result) {
-			return new ExecutionResult.ValueResult(result);
+		public TaskResult v(Object result) {
+			return new TaskResult.ValueResult(result);
 		}
 
 		@Override
-		public ExecutionResult e(TaskError error) {
-			return new ExecutionResult.ErrorResult(error);
+		public TaskResult e(TaskError error) {
+			return new TaskResult.ErrorResult(error);
 		}
 
 		@Override
-		public ExecutionResult c(ExecutionContinuation task) {
-			return new ExecutionResult.ContinuationResult(task);
+		public TaskResult c(TaskContinuation task) {
+			return new TaskResult.ContinuationResult(task);
 		}
 	}
 
@@ -412,7 +412,7 @@ public class Loxecutor {
 		}
 
 		@Override
-		public <T> F<T> submit(String lock, ExecutionTask task) {
+		public <T> F<T> submit(String lock, TaskEntry task) {
 			if (spawns == null) {
 				spawns = new LinkedList<>();
 			}
@@ -497,7 +497,7 @@ public class Loxecutor {
 					}
 
 					@Override
-					public void submit(String lock, ExecutionTask task, Consumer<ValueOrError<?>> callback) {
+					public void submit(String lock, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 						Loxecutor.this.submit0(lock, task, callback);
 					}
 				});
@@ -521,13 +521,13 @@ public class Loxecutor {
 	 * @param task
 	 * @return
 	 */
-	public void submit(String lock, ExecutionTask task, Consumer<ValueOrError<?>> callback) {
+	public void submit(String lock, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 		thread.submit(() -> {
 			Loxecutor.this.submit0(lock, task, callback);
 		});
 	}
 
-	private void submit0(String lock, ExecutionTask task, Consumer<ValueOrError<?>> callback) {
+	private void submit0(String lock, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 		Executor er = executors.get(lock);
 		if (er == null) {
 			er = new Executor(lock);
@@ -560,7 +560,7 @@ public class Loxecutor {
 	 *            for notification
 	 * @return
 	 */
-	private void submit0(String lock, ExecutionTask task, Executable parent, String key) {
+	private void submit0(String lock, TaskEntry task, Executable parent, String key) {
 		Executor er = executors.get(lock);
 		if (er == null) {
 			er = new Executor(lock);
@@ -684,7 +684,7 @@ public class Loxecutor {
 		switch (r0.type()) {
 		case EXECUTION_VALUE: {
 			Execution e = (Execution) e0;
-			ExecutionResult.ValueResult r = (ExecutionResult.ValueResult) r0;
+			TaskResult.ValueResult r = (TaskResult.ValueResult) r0;
 			Object v = r.value;
 
 			Executor er = e.executor;
@@ -706,7 +706,7 @@ public class Loxecutor {
 		}
 		case EXECUTION_ERROR: {
 			Execution e = (Execution) e0;
-			ExecutionResult.ErrorResult r = (ExecutionResult.ErrorResult) r0;
+			TaskResult.ErrorResult r = (TaskResult.ErrorResult) r0;
 			TaskError v = r.error;
 
 			Executor er = e.executor;
@@ -728,7 +728,7 @@ public class Loxecutor {
 		}
 		case EXECUTION_CONTINUATION: {
 			Execution e = (Execution) e0;
-			ExecutionResult.ContinuationResult r = (ExecutionResult.ContinuationResult) r0;
+			TaskResult.ContinuationResult r = (TaskResult.ContinuationResult) r0;
 			e.task = (x) -> r.task.call();
 
 			if (e.spawns != null) {

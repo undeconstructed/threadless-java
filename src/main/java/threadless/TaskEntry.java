@@ -6,7 +6,7 @@ package threadless;
  * @author phil
  * @param <T>
  */
-public interface ExecutionTask {
+public interface TaskEntry {
 
-	public abstract ExecutionResult<?> call(ExecutionContext ctx);
+	public abstract TaskResult<?> call(TaskContext ctx);
 }

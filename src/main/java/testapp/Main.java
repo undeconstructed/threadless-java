@@ -10,8 +10,8 @@ import threadless.ActorContext;
 import threadless.ActorResult;
 import threadless.ActorSleeper;
 import threadless.ActorTask;
-import threadless.ExecutionContext;
-import threadless.ExecutionTask;
+import threadless.TaskContext;
+import threadless.TaskEntry;
 import threadless.F;
 import threadless.Loxecutor;
 import threadless.TaskExternal;
@@ -36,7 +36,7 @@ class SlowThing {
 		});
 	}
 
-	public F<String> doSlowThingForFuture(ExecutionContext ctx) {
+	public F<String> doSlowThingForFuture(TaskContext ctx) {
 		int s = r.nextInt(300);
 		TaskExternal<String> ext = ctx.ext();
 		e.submit(() -> {
@@ -86,7 +86,7 @@ public class Main {
 	}
 
 	public static void withPrereq(long t0, Loxecutor lox, SlowThing slow) {
-		ExecutionTask loader = ctx -> {
+		TaskEntry loader = ctx -> {
 			F<String> fs = slow.doSlowThingForFuture(ctx);
 			return ctx.c(() -> {
 				if (fs.isError()) {
@@ -96,7 +96,7 @@ public class Main {
 			});
 		};
 
-		ExecutionTask task = ctx -> {
+		TaskEntry task = ctx -> {
 			F<String> f = ctx.submit("loader", loader);
 			return ctx.c(() -> {
 				if (f.isError()) {

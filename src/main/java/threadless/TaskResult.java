@@ -5,9 +5,9 @@ package threadless;
  *
  * @author phil
  */
-public abstract class ExecutionResult<T> extends Result {
+public abstract class TaskResult<T> extends Result {
 
-	static class ValueResult<T> extends ExecutionResult<T> {
+	static class ValueResult<T> extends TaskResult<T> {
 
 		final T value;
 
@@ -21,7 +21,7 @@ public abstract class ExecutionResult<T> extends Result {
 		}
 	}
 
-	static class ErrorResult<T> extends ExecutionResult<T> {
+	static class ErrorResult<T> extends TaskResult<T> {
 
 		final TaskError error;
 
@@ -35,11 +35,11 @@ public abstract class ExecutionResult<T> extends Result {
 		}
 	}
 
-	static class ContinuationResult<T> extends ExecutionResult<T> {
+	static class ContinuationResult<T> extends TaskResult<T> {
 
-		final ExecutionContinuation task;
+		final TaskContinuation task;
 
-		ContinuationResult(ExecutionContinuation task) {
+		ContinuationResult(TaskContinuation task) {
 			this.task = task;
 		}
 
@@ -49,6 +49,6 @@ public abstract class ExecutionResult<T> extends Result {
 		}
 	}
 
-	private ExecutionResult() {
+	private TaskResult() {
 	}
 }

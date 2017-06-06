@@ -5,7 +5,7 @@ package threadless;
  *
  * @author phil
  */
-public interface ExecutionContext extends Context {
+public interface TaskContext extends Context {
 
 	/**
 	 * Id of this context.
@@ -27,7 +27,7 @@ public interface ExecutionContext extends Context {
 	 * @param result
 	 * @return
 	 */
-	public abstract <T> ExecutionResult<T> v(T result);
+	public abstract <T> TaskResult<T> v(T result);
 
 	/**
 	 * Get an error result to return.
@@ -35,7 +35,7 @@ public interface ExecutionContext extends Context {
 	 * @param error
 	 * @return
 	 */
-	public abstract ExecutionResult<Void> e(TaskError error);
+	public abstract TaskResult<Void> e(TaskError error);
 
 	/**
 	 * Get a continuation result to return. The context will remain open and the task will be invoked when all
@@ -44,5 +44,5 @@ public interface ExecutionContext extends Context {
 	 * @param task
 	 * @return
 	 */
-	public abstract ExecutionResult<Void> c(ExecutionContinuation task);
+	public abstract TaskResult<Void> c(TaskContinuation task);
 }
