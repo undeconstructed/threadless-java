@@ -145,7 +145,7 @@ public class Loxecutor {
 			active = null;
 			long avg = timings.update(clock.millis() - e.tFirstRun);
 			queueMax = (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
-			log("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
+			gLog("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
 		}
 	}
 
@@ -248,8 +248,8 @@ public class Loxecutor {
 			if (result.type() == Type.EXECUTION_CONTINUATION) {
 				tStartedWaiting = t1;
 			} else {
-				log("lock: %s; task: %s; running: %dms; waiting: %dms; total: %dms%n", executor.lock, id, tTotalRunning,
-						tTotalWaiting, (t1 - tCreated));
+				gLog("lock: %s; task: %s; running: %dms; waiting: %dms; total: %dms%n", executor.lock, id,
+						tTotalRunning, tTotalWaiting, (t1 - tCreated));
 			}
 			return result;
 		}
@@ -274,6 +274,11 @@ public class Loxecutor {
 			spawns.add(new Spawn(lock, task, this, key));
 
 			return futureFromKey(key);
+		}
+
+		@Override
+		public void log(String message) {
+			// TODO Auto-generated method stub
 		}
 
 		private String ext0() {
@@ -423,6 +428,11 @@ public class Loxecutor {
 		}
 
 		@Override
+		public void log(String message) {
+			// TODO Auto-generated method stub
+		}
+
+		@Override
 		public boolean notify(String key, ValueOrError<?> voe) {
 			// TODO - this needs to check if actor is waiting or not
 			keys.put(key, voe);
@@ -510,7 +520,13 @@ public class Loxecutor {
 		});
 	}
 
-	private void log(String format, Object... args) {
+	/**
+	 * For global (not context specific) logging.
+	 * 
+	 * @param format
+	 * @param args
+	 */
+	private void gLog(String format, Object... args) {
 		System.err.format(format, args);
 	}
 
@@ -777,7 +793,7 @@ public class Loxecutor {
 			Actor a = (Actor) e0;
 			ActorResult.ErrorResult r = (ActorResult.ErrorResult) r0;
 			// TODO hmm
-			log("actor: %s; error: %s%n", a.id, r.error);
+			gLog("actor: %s; error: %s%n", a.id, r.error);
 			System.exit(1);
 			break;
 		}
