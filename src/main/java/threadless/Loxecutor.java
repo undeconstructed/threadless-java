@@ -99,7 +99,6 @@ public class Loxecutor {
 		private long queueMax = 1;
 
 		public Executor(String lock) {
-			super();
 			this.lock = lock;
 			this.timings = new RecentAverage(HOW_MANY_TIME_SAMPLES);
 		}
@@ -715,6 +714,10 @@ public class Loxecutor {
 			Execution e = (Execution) e0;
 			TaskResult.ValueResult r = (TaskResult.ValueResult) r0;
 			Object v = r.value;
+
+			if (e.spawns != null) {
+				// TODO - spawns have not been accounted for
+			}
 
 			Executor er = e.executor;
 			er.onComplete(e);
