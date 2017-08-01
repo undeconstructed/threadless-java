@@ -45,4 +45,16 @@ public interface TaskContext extends Context {
 	 * @return
 	 */
 	public abstract TaskResult<Void> c(TaskContinuation task);
+
+	/**
+	 * As {@link #c(TaskContinuation)}, but allows switching mode. By default all tasks are in read only mode and may be
+	 * scheduled concurrently; switching to write mode will put this task on hold until all read mode tasks on the lock
+	 * are completed, at which point it will be run exclusively. If multiple readers attempt to gain write mode at the
+	 * same time they will be queued and run sequentially.
+	 * 
+	 * @param task
+	 * @param mode
+	 * @return
+	 */
+	public abstract TaskResult<Void> c(TaskContinuation task, TaskMode mode);
 }
