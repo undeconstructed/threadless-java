@@ -3,7 +3,7 @@ package threadless;
 import java.util.function.Supplier;
 
 /**
- * Contexts track the execution of an actor or an indivual task.
+ * Contexts track the execution of an actor or an individual task.
  * 
  * @author phil
  */

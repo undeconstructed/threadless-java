@@ -66,8 +66,8 @@ public class Main {
 
 		// directExecutions(t0, lox, slow);
 		// withRootActor(t0, lox, slow);
-		// lotsOfTheSame(t0, lox, slow, 100);
-		withPrereq(t0, lox, slow);
+		lotsOfTheSame(t0, lox, slow, 100);
+		// withPrereq(t0, lox, slow);
 
 		lox.shutdown();
 		System.out.format("[%d] done%n", System.currentTimeMillis() - t0);
@@ -117,7 +117,7 @@ public class Main {
 					return ctx.v("time " + f.value());
 				});
 			}, printCallback("t" + i));
-			Thread.sleep(1000);
+			Thread.sleep(10);
 		}
 	}
 

@@ -45,7 +45,7 @@ public class Loxecutor {
 	}
 
 	private static final int HOW_MANY_TIME_SAMPLES = 4;
-	private static final long HOW_LONG_IS_TOO_LONG = 2000;
+	private static final long HOW_LONG_IS_TOO_LONG = 10000;
 
 	/**
 	 * Tracks the average of the last n numbers it was given. Is not accurate at the start.
@@ -89,8 +89,10 @@ public class Loxecutor {
 
 		// lock this executor is guarding
 		public final String lock;
-		// currently active execution
-		private Execution active;
+		// how many tasks can run at once
+		private final int concurrency = 10;
+		// currently active executions
+		private List<Execution> active;
 		// executions that are waiting on this lock
 		private Queue<Execution> queue = new LinkedList<>();
 		// for tracking execution times
@@ -100,6 +102,7 @@ public class Loxecutor {
 
 		public Executor(String lock) {
 			this.lock = lock;
+			this.active = new LinkedList<>();
 			this.timings = new RecentAverage(HOW_MANY_TIME_SAMPLES);
 		}
 
@@ -130,20 +133,20 @@ public class Loxecutor {
 		 * If nothing is active, this makes the next from the queue active, and returns it to be scheduled.
 		 */
 		public Execution getExecutionToSchedule() {
-			if (active == null) {
-				active = queue.poll();
-				if (active != null) {
-					return active;
+			if (active.size() < concurrency) {
+				Execution next = queue.poll();
+				if (next != null) {
+					active.add(next);
+					return next;
 				}
 			}
 			return null;
 		}
 
 		public void onComplete(Execution e) {
-			assert e == active;
-			active = null;
+			active.remove(e);
 			long avg = timings.update(clock.millis() - e.tFirstRun);
-			queueMax = (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
+			queueMax = (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 100) : 10);
 			gLog("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
 		}
 	}
