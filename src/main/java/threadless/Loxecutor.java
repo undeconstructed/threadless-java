@@ -1,11 +1,14 @@
 package threadless;
 
 import java.time.Clock;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -83,53 +86,72 @@ public class Loxecutor {
 	}
 
 	/**
-	 * Manages a sequence of Executions waiting on the same lock.
+	 * Manages multiple Executions on the same lock.
+	 *
+	 * @author phil
 	 */
-	private class Executor {
+	private abstract class Executor {
 
 		// lock this executor is guarding
 		public final String lock;
-		// currently active execution
-		private Execution active;
-		// executions that are waiting on this lock
-		private Queue<Execution> queue = new LinkedList<>();
-		// for tracking execution times
-		private RecentAverage timings;
-		// for tracking execution times
-		private long queueMax = 1;
 
 		public Executor(String lock) {
 			this.lock = lock;
-			this.timings = new RecentAverage(HOW_MANY_TIME_SAMPLES);
 		}
 
 		/**
 		 * Adds an {@link Execution}, or returns an error saying it will not be run.
 		 */
 		public TaskError add(String id, TaskEntry task, Executable parent, String key) {
-			if (queue.size() > queueMax) {
-				return new TaskError("queue full");
-			}
-
-			Execution e = new Execution(this, id, task, parent, key);
-			queue.add(e);
-			return null;
+			return add(new Execution(this, id, task, parent, key));
 		}
 
 		public TaskError add(String id, TaskEntry task, Consumer<ValueOrError<?>> callback) {
-			if (queue.size() > queueMax) {
-				return new TaskError("queue full");
-			}
-
-			Execution e = new Execution(this, id, task, callback);
-			queue.add(e);
-			return null;
+			return add(new Execution(this, id, task, callback));
 		}
+
+		public abstract TaskError add(Execution ex);
 
 		/**
 		 * If nothing is active, this makes the next from the queue active, and returns it to be scheduled.
 		 */
+		public abstract Execution getExecutionToSchedule();
+
+		public abstract void onComplete(Execution e);
+	}
+
+	/**
+	 * Manages a sequence of Executions running one after another.
+	 */
+	private class SingleExecutor extends Executor {
+		
+		// currently active execution
+		private Execution active;
+		// executions that are waiting on this lock
+		private Queue<Execution> queue = new LinkedList<>();
+		// for tracking execution times
+		protected RecentAverage timings;
+		// for tracking execution times
+		protected long queueMax = 1;
+
+		public SingleExecutor(String lock) {
+			super(lock);
+			this.timings = new RecentAverage(HOW_MANY_TIME_SAMPLES);
+		}
+
+		@Override
+		public TaskError add(Execution ex) {
+			if (queue.size() > queueMax) {
+				return new TaskError("queue full");
+			}
+
+			queue.add(ex);
+			return null;
+		}
+
+		@Override
 		public Execution getExecutionToSchedule() {
+			// If nothing is active, this makes the next from the queue active, and returns it to be scheduled.
 			if (active == null) {
 				active = queue.poll();
 				if (active != null) {
@@ -139,12 +161,50 @@ public class Loxecutor {
 			return null;
 		}
 
+		@Override
 		public void onComplete(Execution e) {
 			assert e == active;
 			active = null;
 			long avg = timings.update(clock.millis() - e.tFirstRun);
 			queueMax = (avg > 0 ? Math.min(HOW_LONG_IS_TOO_LONG / avg, 10) : 10);
 			gLog("lock: %s; average %dms; queue: %d; queue max: %d%n", lock, avg, queue.size(), queueMax);
+		}
+	}
+
+	/**
+	 * Manages a sequence of Executions waiting on the same lock where multiple readers can run or one writer.
+	 */
+	private class ReadWriteExecutor extends Executor {
+		
+		// currently active execution
+		private Execution activeWrite;
+		private Set<Execution> activeReads = Collections.newSetFromMap(new IdentityHashMap());
+		// executions that are waiting on this lock
+		private Queue<Execution> queue = new LinkedList<>();
+		// for tracking execution times
+		protected RecentAverage timings;
+		// for tracking execution times
+		protected long queueMax = 1;
+
+		public ReadWriteExecutor(String lock) {
+			super(lock);
+		}
+
+		@Override
+		public TaskError add(Execution ex) {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		@Override
+		public Execution getExecutionToSchedule() {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		@Override
+		public void onComplete(Execution e) {
+			// TODO Auto-generated method stub
 		}
 	}
 
@@ -555,10 +615,17 @@ public class Loxecutor {
 		});
 	}
 
+	/**
+	 * External submit function part 2, must run in the main thread.
+	 * 
+	 * @param lock
+	 * @param task
+	 * @param callback
+	 */
 	private void submit0(String lock, TaskEntry task, Consumer<ValueOrError<?>> callback) {
 		Executor er = executors.get(lock);
 		if (er == null) {
-			er = new Executor(lock);
+			er = new SingleExecutor(lock);
 			executors.put(lock, er);
 		}
 
@@ -591,7 +658,7 @@ public class Loxecutor {
 	private void submit0(String lock, TaskEntry task, Executable parent, String key) {
 		Executor er = executors.get(lock);
 		if (er == null) {
-			er = new Executor(lock);
+			er = new SingleExecutor(lock);
 			executors.put(lock, er);
 		}
 
